@@ -1,0 +1,612 @@
+# Excel のプリンタの標準行 (600 dpi・倍率 100% のデバイスピクセル)。正規化した書体名、大きさ (pt)、R。
+# 手で決めた高さの行 20 本の floor(画面 px × R / 画面の標準行) が Excel の高さと最も多く一致する R。
+arial	9.0	93
+arial	10.0	103
+arial	10.5	110
+arial	11.0	114
+arial	12.0	123
+arial	14.0	143
+biz udpゴシック	9.0	85
+biz udpゴシック	10.0	93
+biz udpゴシック	10.5	98
+biz udpゴシック	11.0	102
+biz udpゴシック	12.0	110
+biz udpゴシック	14.0	127
+biz udゴシック	9.0	85
+biz udゴシック	10.0	93
+biz udゴシック	10.5	98
+biz udゴシック	11.0	102
+biz udゴシック	12.0	110
+biz udゴシック	14.0	127
+biz ud明朝 medium	9.0	85
+biz ud明朝 medium	10.0	93
+biz ud明朝 medium	10.5	98
+biz ud明朝 medium	11.0	102
+biz ud明朝 medium	12.0	110
+biz ud明朝 medium	14.0	127
+calibri	9.0	99
+calibri	10.0	109
+calibri	10.5	116
+calibri	11.0	121
+calibri	12.0	130
+calibri	14.0	150
+cambria	9.0	96
+cambria	10.0	105
+cambria	10.5	112
+cambria	11.0	115
+cambria	12.0	125
+cambria	14.0	145
+century	9.0	98
+century	10.0	108
+century	10.5	114
+century	11.0	119
+century	12.0	128
+century	14.0	148
+century gothic	9.0	99
+century gothic	10.0	108
+century gothic	10.5	116
+century gothic	11.0	119
+century gothic	12.0	128
+century gothic	14.0	151
+courier new	9.0	88
+courier new	10.0	96
+courier new	10.5	103
+courier new	11.0	107
+courier new	12.0	115
+courier new	14.0	133
+hg丸ｺﾞｼｯｸm-pro	9.0	85
+hg丸ｺﾞｼｯｸm-pro	10.0	93
+hg丸ｺﾞｼｯｸm-pro	10.5	98
+hg丸ｺﾞｼｯｸm-pro	11.0	102
+hg丸ｺﾞｼｯｸm-pro	12.0	110
+hg丸ｺﾞｼｯｸm-pro	14.0	127
+hg明朝b	9.0	85
+hg明朝b	10.0	93
+hg明朝b	10.5	98
+hg明朝b	11.0	102
+hg明朝b	12.0	110
+hg明朝b	14.0	127
+hgｺﾞｼｯｸm	9.0	85
+hgｺﾞｼｯｸm	10.0	93
+hgｺﾞｼｯｸm	10.5	98
+hgｺﾞｼｯｸm	11.0	102
+hgｺﾞｼｯｸm	12.0	110
+hgｺﾞｼｯｸm	14.0	127
+meiryo ui	9.0	109
+meiryo ui	10.0	118
+meiryo ui	10.5	124
+meiryo ui	11.0	131
+meiryo ui	12.0	141
+meiryo ui	14.0	164
+ms pゴシック	9.0	85
+ms pゴシック	10.0	93
+ms pゴシック	10.5	98
+ms pゴシック	11.0	102
+ms pゴシック	12.0	110
+ms pゴシック	14.0	127
+ms p明朝	9.0	85
+ms p明朝	10.0	93
+ms p明朝	10.5	98
+ms p明朝	11.0	102
+ms p明朝	12.0	110
+ms p明朝	14.0	127
+ms ui gothic	9.0	85
+ms ui gothic	10.0	93
+ms ui gothic	10.5	98
+ms ui gothic	11.0	102
+ms ui gothic	12.0	110
+ms ui gothic	14.0	127
+ms ゴシック	9.0	85
+ms ゴシック	10.0	93
+ms ゴシック	10.5	98
+ms ゴシック	11.0	102
+ms ゴシック	12.0	110
+ms ゴシック	14.0	127
+ms 明朝	9.0	85
+ms 明朝	10.0	93
+ms 明朝	10.5	98
+ms 明朝	11.0	102
+ms 明朝	12.0	110
+ms 明朝	14.0	127
+segoe ui	9.0	114
+segoe ui	10.0	124
+segoe ui	10.5	130
+segoe ui	11.0	138
+segoe ui	12.0	148
+segoe ui	14.0	171
+tahoma	9.0	98
+tahoma	10.0	108
+tahoma	10.5	114
+tahoma	11.0	119
+tahoma	12.0	129
+tahoma	14.0	149
+times new roman	9.0	96
+times new roman	10.0	106
+times new roman	10.5	112
+times new roman	11.0	116
+times new roman	12.0	126
+times new roman	14.0	145
+verdana	9.0	100
+verdana	10.0	108
+verdana	10.5	114
+verdana	11.0	122
+verdana	12.0	129
+verdana	14.0	150
+yu gothic ui	9.0	114
+yu gothic ui	10.0	124
+yu gothic ui	10.5	130
+yu gothic ui	11.0	138
+yu gothic ui	12.0	148
+yu gothic ui	14.0	171
+メイリオ	9.0	126
+メイリオ	10.0	138
+メイリオ	10.5	145
+メイリオ	11.0	152
+メイリオ	12.0	164
+メイリオ	14.0	190
+游ゴシック	9.0	128
+游ゴシック	10.0	140
+游ゴシック	10.5	149
+游ゴシック	11.0	154
+游ゴシック	12.0	164
+游ゴシック	14.0	192
+游ゴシック medium	9.0	127
+游ゴシック medium	10.0	140
+游ゴシック medium	10.5	148
+游ゴシック medium	11.0	153
+游ゴシック medium	12.0	166
+游ゴシック medium	14.0	194
+游明朝	9.0	129
+游明朝	10.0	141
+游明朝	10.5	150
+游明朝	11.0	155
+游明朝	12.0	167
+游明朝	14.0	193
+# (画面の標準行が別の測定で分かった大きさ)
+arial	6.0	67
+arial	7.0	76
+arial	7.5	81
+arial	8.0	85
+arial	8.5	90
+arial	9.5	99
+arial	11.5	118
+arial	12.5	127
+arial	13.0	132
+arial	13.5	138
+arial	15.0	151
+arial	16.0	161
+arial	18.0	181
+arial	20.0	200
+arial	22.0	218
+arial	24.0	238
+arial	26.0	257
+biz udゴシック	6.0	60
+biz udgothic	6.0	60
+biz udゴシック	7.0	68
+biz udgothic	7.0	68
+biz udゴシック	7.5	73
+biz udgothic	7.5	73
+biz udゴシック	8.0	77
+biz udgothic	8.0	77
+biz udゴシック	8.5	81
+biz udgothic	8.5	81
+biz udゴシック	9.5	89
+biz udgothic	9.5	89
+biz udゴシック	11.5	106
+biz udgothic	11.5	106
+biz udゴシック	12.5	114
+biz udgothic	12.5	114
+biz udゴシック	13.0	118
+biz udgothic	13.0	118
+biz udゴシック	13.5	123
+biz udgothic	13.5	123
+biz udゴシック	15.0	135
+biz udgothic	15.0	135
+biz udゴシック	16.0	143
+biz udgothic	16.0	143
+biz udゴシック	18.0	160
+biz udgothic	18.0	160
+biz udゴシック	20.0	177
+biz udgothic	20.0	177
+biz udゴシック	22.0	193
+biz udgothic	22.0	193
+biz udゴシック	24.0	210
+biz udgothic	24.0	210
+biz udゴシック	26.0	227
+biz udgothic	26.0	227
+biz udゴシック	28.0	243
+biz udgothic	28.0	243
+calibri	6.0	69
+calibri	7.0	79
+calibri	7.5	85
+calibri	8.0	90
+calibri	8.5	95
+calibri	9.5	104
+calibri	11.5	125
+calibri	12.5	135
+calibri	13.0	140
+calibri	13.5	146
+calibri	15.0	161
+calibri	16.0	171
+calibri	18.0	191
+calibri	20.0	212
+calibri	22.0	231
+calibri	24.0	252
+hgｺﾞｼｯｸm	6.0	60
+hggothicm	6.0	60
+hgｺﾞｼｯｸm	7.0	68
+hggothicm	7.0	68
+hgｺﾞｼｯｸm	7.5	73
+hggothicm	7.5	73
+hgｺﾞｼｯｸm	8.0	77
+hggothicm	8.0	77
+hgｺﾞｼｯｸm	8.5	81
+hggothicm	8.5	81
+hgｺﾞｼｯｸm	9.5	89
+hggothicm	9.5	89
+hgｺﾞｼｯｸm	11.5	106
+hggothicm	11.5	106
+hgｺﾞｼｯｸm	12.5	114
+hggothicm	12.5	114
+hgｺﾞｼｯｸm	13.0	118
+hggothicm	13.0	118
+hgｺﾞｼｯｸm	13.5	123
+hggothicm	13.5	123
+hgｺﾞｼｯｸm	15.0	135
+hggothicm	15.0	135
+hgｺﾞｼｯｸm	16.0	143
+hggothicm	16.0	143
+hgｺﾞｼｯｸm	18.0	160
+hggothicm	18.0	160
+hgｺﾞｼｯｸm	20.0	177
+hggothicm	20.0	177
+hgｺﾞｼｯｸm	22.0	193
+hggothicm	22.0	193
+hgｺﾞｼｯｸm	24.0	210
+hggothicm	24.0	210
+hgｺﾞｼｯｸm	26.0	227
+hggothicm	26.0	227
+hgｺﾞｼｯｸm	28.0	243
+hggothicm	28.0	243
+hg丸ｺﾞｼｯｸm-pro	6.0	60
+hg丸ｺﾞｼｯｸm-pro	7.0	68
+hg丸ｺﾞｼｯｸm-pro	7.5	73
+hg丸ｺﾞｼｯｸm-pro	8.0	77
+hg丸ｺﾞｼｯｸm-pro	8.5	81
+hg丸ｺﾞｼｯｸm-pro	9.5	89
+hg丸ｺﾞｼｯｸm-pro	11.5	106
+hg丸ｺﾞｼｯｸm-pro	12.5	114
+hg丸ｺﾞｼｯｸm-pro	13.0	118
+hg丸ｺﾞｼｯｸm-pro	13.5	123
+hg丸ｺﾞｼｯｸm-pro	15.0	135
+hg丸ｺﾞｼｯｸm-pro	16.0	143
+hg丸ｺﾞｼｯｸm-pro	18.0	160
+hg丸ｺﾞｼｯｸm-pro	20.0	177
+hg丸ｺﾞｼｯｸm-pro	22.0	193
+hg丸ｺﾞｼｯｸm-pro	24.0	210
+hg丸ｺﾞｼｯｸm-pro	26.0	227
+hg丸ｺﾞｼｯｸm-pro	28.0	243
+メイリオ	6.0	86
+meiryo	6.0	86
+メイリオ	7.0	98
+meiryo	7.0	98
+メイリオ	7.5	107
+meiryo	7.5	107
+メイリオ	8.0	112
+meiryo	8.0	112
+メイリオ	8.5	118
+meiryo	8.5	118
+メイリオ	9.5	132
+meiryo	9.5	132
+メイリオ	11.5	158
+meiryo	11.5	158
+メイリオ	12.5	170
+meiryo	12.5	170
+メイリオ	13.0	176
+meiryo	13.0	176
+メイリオ	13.5	185
+meiryo	13.5	185
+メイリオ	15.0	204
+meiryo	15.0	204
+メイリオ	16.0	216
+meiryo	16.0	216
+メイリオ	18.0	242
+meiryo	18.0	242
+メイリオ	26.0	346
+meiryo	26.0	346
+meiryo ui	6.0	75
+meiryo ui	7.0	84
+meiryo ui	7.5	92
+meiryo ui	8.0	97
+meiryo ui	8.5	102
+meiryo ui	9.5	114
+meiryo ui	11.5	136
+meiryo ui	12.5	146
+meiryo ui	13.0	151
+meiryo ui	13.5	159
+meiryo ui	15.0	175
+meiryo ui	16.0	185
+meiryo ui	18.0	208
+meiryo ui	20.0	230
+meiryo ui	22.0	251
+meiryo ui	24.0	274
+meiryo ui	26.0	297
+ms ゴシック	6.0	60
+ms gothic	6.0	60
+ms ゴシック	7.0	68
+ms gothic	7.0	68
+ms ゴシック	7.5	73
+ms gothic	7.5	73
+ms ゴシック	8.0	77
+ms gothic	8.0	77
+ms ゴシック	8.5	81
+ms gothic	8.5	81
+ms ゴシック	9.5	89
+ms gothic	9.5	89
+ms ゴシック	11.5	106
+ms gothic	11.5	106
+ms ゴシック	12.5	114
+ms gothic	12.5	114
+ms ゴシック	13.0	118
+ms gothic	13.0	118
+ms ゴシック	13.5	123
+ms gothic	13.5	123
+ms ゴシック	15.0	135
+ms gothic	15.0	135
+ms ゴシック	16.0	143
+ms gothic	16.0	143
+ms ゴシック	18.0	160
+ms gothic	18.0	160
+ms ゴシック	20.0	177
+ms gothic	20.0	177
+ms ゴシック	22.0	193
+ms gothic	22.0	193
+ms ゴシック	24.0	210
+ms gothic	24.0	210
+ms ゴシック	26.0	227
+ms gothic	26.0	227
+ms ゴシック	28.0	243
+ms gothic	28.0	243
+ms 明朝	6.0	60
+ms mincho	6.0	60
+ms 明朝	7.0	68
+ms mincho	7.0	68
+ms 明朝	7.5	73
+ms mincho	7.5	73
+ms 明朝	8.0	77
+ms mincho	8.0	77
+ms 明朝	8.5	81
+ms mincho	8.5	81
+ms 明朝	9.5	89
+ms mincho	9.5	89
+ms 明朝	11.5	106
+ms mincho	11.5	106
+ms 明朝	12.5	114
+ms mincho	12.5	114
+ms 明朝	13.0	118
+ms mincho	13.0	118
+ms 明朝	13.5	123
+ms mincho	13.5	123
+ms 明朝	15.0	135
+ms mincho	15.0	135
+ms 明朝	16.0	143
+ms mincho	16.0	143
+ms 明朝	18.0	160
+ms mincho	18.0	160
+ms 明朝	20.0	177
+ms mincho	20.0	177
+ms 明朝	22.0	193
+ms mincho	22.0	193
+ms 明朝	24.0	210
+ms mincho	24.0	210
+ms 明朝	26.0	227
+ms mincho	26.0	227
+ms 明朝	28.0	243
+ms mincho	28.0	243
+ms pゴシック	6.0	60
+ms pgothic	6.0	60
+ms pゴシック	7.0	68
+ms pgothic	7.0	68
+ms pゴシック	7.5	73
+ms pgothic	7.5	73
+ms pゴシック	8.0	77
+ms pgothic	8.0	77
+ms pゴシック	8.5	81
+ms pgothic	8.5	81
+ms pゴシック	9.5	89
+ms pgothic	9.5	89
+ms pゴシック	11.5	106
+ms pgothic	11.5	106
+ms pゴシック	12.5	114
+ms pgothic	12.5	114
+ms pゴシック	13.0	118
+ms pgothic	13.0	118
+ms pゴシック	13.5	123
+ms pgothic	13.5	123
+ms pゴシック	15.0	135
+ms pgothic	15.0	135
+ms pゴシック	16.0	143
+ms pgothic	16.0	143
+ms pゴシック	18.0	160
+ms pgothic	18.0	160
+ms pゴシック	20.0	177
+ms pgothic	20.0	177
+ms pゴシック	22.0	193
+ms pgothic	22.0	193
+ms pゴシック	24.0	210
+ms pgothic	24.0	210
+ms pゴシック	26.0	227
+ms pgothic	26.0	227
+ms pゴシック	28.0	243
+ms pgothic	28.0	243
+ms p明朝	6.0	60
+ms pmincho	6.0	60
+ms p明朝	7.0	68
+ms pmincho	7.0	68
+ms p明朝	7.5	73
+ms pmincho	7.5	73
+ms p明朝	8.0	77
+ms pmincho	8.0	77
+ms p明朝	8.5	81
+ms pmincho	8.5	81
+ms p明朝	9.5	89
+ms pmincho	9.5	89
+ms p明朝	11.5	106
+ms pmincho	11.5	106
+ms p明朝	12.5	114
+ms pmincho	12.5	114
+ms p明朝	13.0	118
+ms pmincho	13.0	118
+ms p明朝	13.5	123
+ms pmincho	13.5	123
+ms p明朝	15.0	135
+ms pmincho	15.0	135
+ms p明朝	16.0	143
+ms pmincho	16.0	143
+ms p明朝	18.0	160
+ms pmincho	18.0	160
+ms p明朝	20.0	177
+ms pmincho	20.0	177
+ms p明朝	22.0	193
+ms pmincho	22.0	193
+ms p明朝	24.0	210
+ms pmincho	24.0	210
+ms p明朝	26.0	227
+ms pmincho	26.0	227
+ms p明朝	28.0	243
+ms pmincho	28.0	243
+游ゴシック	6.0	87
+yu gothic	6.0	87
+游ゴシック	7.0	100
+yu gothic	7.0	100
+游ゴシック	7.5	108
+yu gothic	7.5	108
+游ゴシック	8.0	113
+yu gothic	8.0	113
+游ゴシック	8.5	120
+yu gothic	8.5	120
+游ゴシック	9.5	133
+yu gothic	9.5	133
+游ゴシック	11.5	161
+yu gothic	11.5	161
+游ゴシック	12.5	171
+yu gothic	12.5	171
+游ゴシック	13.0	179
+yu gothic	13.0	179
+游ゴシック	13.5	187
+yu gothic	13.5	187
+游ゴシック	15.0	205
+yu gothic	15.0	205
+游ゴシック	16.0	219
+yu gothic	16.0	219
+游ゴシック	18.0	245
+yu gothic	18.0	245
+游ゴシック	22.0	298
+yu gothic	22.0	298
+游明朝	6.0	89
+yu mincho	6.0	89
+游明朝	7.0	101
+yu mincho	7.0	101
+游明朝	7.5	109
+yu mincho	7.5	109
+游明朝	8.0	115
+yu mincho	8.0	115
+游明朝	8.5	122
+yu mincho	8.5	122
+游明朝	9.5	134
+yu mincho	9.5	134
+游明朝	11.5	162
+yu mincho	11.5	162
+游明朝	12.5	172
+yu mincho	12.5	172
+游明朝	13.0	180
+yu mincho	13.0	180
+游明朝	13.5	188
+yu mincho	13.5	188
+游明朝	15.0	205
+yu mincho	15.0	205
+游明朝	16.0	220
+yu mincho	16.0	220
+游明朝	18.0	246
+yu mincho	18.0	246
+游明朝	20.0	274
+yu mincho	20.0	274
+# 英語名の別名
+biz udpgothic	9.0	85
+biz udpgothic	10.0	93
+biz udpgothic	10.5	98
+biz udpgothic	11.0	102
+biz udpgothic	12.0	110
+biz udpgothic	14.0	127
+biz udgothic	9.0	85
+biz udgothic	10.0	93
+biz udgothic	10.5	98
+biz udgothic	11.0	102
+biz udgothic	12.0	110
+biz udgothic	14.0	127
+biz udmincho medium	9.0	85
+biz udmincho medium	10.0	93
+biz udmincho medium	10.5	98
+biz udmincho medium	11.0	102
+biz udmincho medium	12.0	110
+biz udmincho medium	14.0	127
+hgminchob	9.0	85
+hgminchob	10.0	93
+hgminchob	10.5	98
+hgminchob	11.0	102
+hgminchob	12.0	110
+hgminchob	14.0	127
+hggothicm	9.0	85
+hggothicm	10.0	93
+hggothicm	10.5	98
+hggothicm	11.0	102
+hggothicm	12.0	110
+hggothicm	14.0	127
+ms pgothic	9.0	85
+ms pgothic	10.0	93
+ms pgothic	10.5	98
+ms pgothic	11.0	102
+ms pgothic	12.0	110
+ms pgothic	14.0	127
+ms pmincho	9.0	85
+ms pmincho	10.0	93
+ms pmincho	10.5	98
+ms pmincho	11.0	102
+ms pmincho	12.0	110
+ms pmincho	14.0	127
+ms gothic	9.0	85
+ms gothic	10.0	93
+ms gothic	10.5	98
+ms gothic	11.0	102
+ms gothic	12.0	110
+ms gothic	14.0	127
+ms mincho	9.0	85
+ms mincho	10.0	93
+ms mincho	10.5	98
+ms mincho	11.0	102
+ms mincho	12.0	110
+ms mincho	14.0	127
+meiryo	9.0	126
+meiryo	10.0	138
+meiryo	10.5	145
+meiryo	11.0	152
+meiryo	12.0	164
+meiryo	14.0	190
+yu gothic	9.0	128
+yu gothic	10.0	140
+yu gothic	10.5	149
+yu gothic	11.0	154
+yu gothic	12.0	164
+yu gothic	14.0	192
+yu gothic medium	9.0	127
+yu gothic medium	10.0	140
+yu gothic medium	10.5	148
+yu gothic medium	11.0	153
+yu gothic medium	12.0	166
+yu gothic medium	14.0	194
+yu mincho	9.0	129
+yu mincho	10.0	141
+yu mincho	10.5	150
+yu mincho	11.0	155
+yu mincho	12.0	167
+yu mincho	14.0	193

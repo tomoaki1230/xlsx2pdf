@@ -1,0 +1,514 @@
+# xlsx2pdf
+
+Excel ブック（.xlsx）を、Excel の「PDF として保存」とほぼ同じレイアウトで PDF に変換する Java のツールです。
+Excel も LibreOffice も要りません。Java だけで動きます（Apache POI と Apache PDFBox を使っています）。
+
+役所の申請書のように、罫線と文字の位置がそろっていることが大切な様式を、サーバーなどで PDF にしたい場合を想定しています。
+
+## 特長
+
+- **Excel と同じページ割り・位置・大きさ**: Excel は印刷や PDF への保存のとき、列幅や行の高さを「拡大縮小した後のフォントを、プリンタの
+  解像度で実体化した大きさ」から計算するため、画面の寸法とは少し違います。本ツールはこの計算を再現しています。
+- **Excel の出力との一致を実測**: 官公庁・自治体が公開している xlsx を Excel で PDF にした結果と、本ツールの出力をページの画像として重ね合わせて比べています（1.0 = 完全に一致）。比べたブックと評価のスクリプトは、公開ソースに含みません。
+
+  | 比べた PDF | 件数 | 一致率の平均 | ページ数が同じ |
+  |---|---|---|---|
+  | Microsoft 365 で PDF に保存したもの | 1,060 件 | 0.996 | 1,060 件 |
+  | Excel 2024 で PDF に保存したもの | 733 件 | 0.996 | 732 件 |
+  | Excel 2021 で PDF に保存したもの | 733 件 | 0.997 | 733 件 |
+  | 役所などが Web で公開している PDF（`--author-env`） | 739 件 | 0.903 | 722 件 |
+
+  役所などの PDF は、作った人の PC で出力されたものです。Excel の版や画面の表示倍率が分からないため、ファイルの情報から推測して合わせています。
+
+  **重ね合わせの例**（一致率 0.997。上の表の平均に近いブックです）: Excel の PDF と本ツールの PDF を重ねた画像です。黒は両方が一致した部分、赤は Excel だけ、青は本ツールだけにある部分です。
+
+  ![Excel と本ツールの出力を重ねた画像。経歴書の様式で、罫線はほとんどが黒く重なり、下の記入要領の文字にわずかに赤と青のずれが見える](docs/images/overlay-keirekisho.png)
+
+  一致率は同じでも、見え方はブックによって違います。文字の折り返し位置が変わるブックでは、差がより目立ちます。
+- **日本語の様式に強い**: 和暦・曜日などの日本語の表示形式、縦書き、均等割り付け、ＭＳ 系フォントの字送りなど。
+- **外部ソフト不要・ネットワーク不要**: 変換はすべてプロセスの中で行います。
+
+## バージョン
+
+1.0.0
+
+## 動作環境
+
+- Java 17 以上
+- Windows / macOS / Linux
+
+## 作られるファイル
+
+「[ビルド](#ビルド)」の手順で、次の 2 つの jar ができます。
+
+| ファイル | 内容 |
+|---|---|
+| `xlsx2pdf.jar` | 本体（実行可能 jar。依存ライブラリを同梱） |
+| `xlsx2pdf-fonts.jar` | 代替フォント（IPA フォントなど）。`xlsx2pdf.jar` と同じフォルダに置くと自動で使われます（使い方は「[代替フォント（xlsx2pdf-fonts.jar）の使い方](#代替フォントxlsx2pdf-fontsjarの使い方)」） |
+
+`xlsx2pdf-fonts.jar` は、Excel のフォント（ＭＳ ゴシック、游ゴシックなど）が入っていない環境（Linux サーバーなど）で使います。
+Office の入った Windows のように実際のフォントがある環境では、`xlsx2pdf.jar` だけでも動きます。
+
+## 使い方
+
+```
+java -jar xlsx2pdf.jar <入力.xlsx> <出力.pdf> [オプション]
+```
+
+既定では、非表示でないシートをすべて、ブックの順に 1 つの PDF に出力します（印刷するものがないシートは出力しません）。
+印刷範囲・改ページ・拡大縮小・ヘッダー/フッターなどは、ブックの印刷設定に従います。
+
+### どの Excel の出力に合わせるか
+
+同じ xlsx でも、Excel で「PDF として保存」した結果は、保存した PC によって少し変わります（文字や罫線の位置、行の高さ、
+ページの区切りなど）。主な違いは「Excel の版」と「Windows の画面の表示倍率（100% / 125% / 150% など）」です。どの PC で
+PDF にしたかはファイルに記録されないため、本ツールは合わせる先を次の 3 つから選べるようにしています。
+
+| 合わせる先 | 指定 | こんなときに |
+|---|---|---|
+| **今の Excel で、表示倍率 100% の PC で PDF に保存した結果**（既定） | なし | 手元の Excel で PDF にするのと同じ結果にしたい。ふつうはこれ |
+| 今の Excel で、表示倍率 125% / 150% などの PC で PDF に保存した結果 | `--screen-dpi 125%` など | 表示倍率を上げた PC の Excel と同じにしたい |
+| ファイルを作った人が、自分の PC で PDF に保存した結果 | `--author-env` | 役所などが公開している「Excel ファイルと PDF の組」の PDF に近づけたい |
+
+Excel から PDF 用のプリンタ（Microsoft Print to PDF など）へ印刷した場合も、配置の計算は「PDF として保存」と同じです。
+
+- 「今の Excel」は Microsoft 365 / Excel 2021 / 2024 です（これらの間で出力はほぼ同じです）。
+- `--author-env` は、ファイルに残っている手がかり（最後に保存した Excel の版、作った PC の画面に由来する列幅や行の高さの端数）
+  から、作った人の環境（Excel 2010 / 2013 などの古い版、表示倍率 125% / 150% の画面）を推測して合わせます。推測なので、
+  外れることがあります。
+- `--author-env` と `--screen-dpi` を両方指定すると、画面の表示倍率は `--screen-dpi` の値を使い、版は推測します。
+
+### 利用例
+
+```sh
+# いちばん簡単な使い方
+java -jar xlsx2pdf.jar 申請書.xlsx 申請書.pdf
+
+# 特定のシートだけ (複数指定できます。名前に空白があれば引用符で囲みます)
+java -jar xlsx2pdf.jar 様式集.xlsx 様式1.pdf --sheet "様式第1号" --sheet "様式第2号"
+
+# Excel の「作業中のシートを印刷」と同じ (選択中のシートだけ)
+java -jar xlsx2pdf.jar 様式集.xlsx 作業中.pdf --active-only
+
+# パスワード付きのブック
+java -jar xlsx2pdf.jar 秘密.xlsx 秘密.pdf --password 'パスワード'
+
+# Windows のフォントをコピーしたフォルダを追加で使う (Linux サーバーで Excel と同じ字形にしたいとき)
+java -jar xlsx2pdf.jar 申請書.xlsx 申請書.pdf --font-dir /opt/fonts/windows
+
+# 用紙サイズが設定されていないブックを A3 で出力する
+java -jar xlsx2pdf.jar 図面.xlsx 図面.pdf --default-paper A3
+
+# 画面の表示倍率を 150% にしている PC の Excel で PDF に保存した結果に合わせる
+java -jar xlsx2pdf.jar 申請書.xlsx 申請書.pdf --screen-dpi 150%
+
+# ファイルを作った人が出力した PDF (公開されている PDF など) に近づける
+java -jar xlsx2pdf.jar 申請書.xlsx 申請書.pdf --author-env
+
+# 信頼できないファイルを変換するサービスで、時間の上限を 60 秒にする
+java -jar xlsx2pdf.jar 受付.xlsx 受付.pdf --timeout 60
+
+# 大きなファイルを、時間とメモリを掛けてでも変換する (上限を外し、Java に 16GB 使わせる)
+java -Xmx16g -jar xlsx2pdf.jar 大きな台帳.xlsx 台帳.pdf --no-limits
+```
+
+### オプション
+
+| オプション | 説明 |
+|---|---|
+| `--sheet NAME` | 指定したシートだけを出力します（複数指定可）。名前で指定したシートは非表示でも出力します。 |
+| `--active-only` | 選択中（アクティブ）のシートだけを出力します（Excel の「作業中のシートを印刷」と同じ）。 |
+| `--password PW` | 暗号化されたブックのパスワード。 |
+| `--font-dir DIR` | フォントを探すフォルダを追加します（複数指定可）。ここにあるフォントが最も優先されます。 |
+| `--default-paper P` | ブックに用紙サイズがないときの用紙（A4, A3, A5, B4, B5, Letter, Legal, Tabloid）。既定は A4（日本語版 Windows のプリンタの既定と同じ）。`--author-env` のときは、日本語のブックなら A4、それ以外は Letter。 |
+| `--excel-page-size` | 拡大縮小して印刷するシートのページの大きさを、Excel の PDF と同じ「用紙サイズ ÷ 倍率」にします。既定は実際の用紙サイズ。 |
+| `--screen-dpi N` | 合わせたい Excel の PC の画面の表示倍率（96 = 100%、120 = 125%、144 = 150%、192 = 200%。`150%` のようにも書けます）。既定は 96（100%）。`--author-env` のときの既定はファイルから推定します。 |
+| `--author-env` | ファイルを作った人の環境（Excel の版・画面の表示倍率）をファイルから推測し、その人が出力した PDF に近づけます（上の「どの Excel の出力に合わせるか」）。既定は、今の Excel で表示倍率 100% の PC で PDF に保存した結果に合わせます。 |
+| `--printer-dpi N` | 合わせたい Excel で選んでいたプリンタの解像度（既定 600。Microsoft Print to PDF は 600）。 |
+| `--use-file-dpi` | ファイルに保存されたプリンタの解像度でレイアウトします（既定は常に 600dpi）。 |
+| `--max-pages N` | 作るページ数の上限（既定 10,000。0 = 無制限）。 |
+| `--max-image-pixels N` | 1 枚の画像の画素数の上限（既定 5,000 万。超える画像は描きません。0 = 無制限）。 |
+| `--max-zip-entry-mb N` | xlsx（zip）の中の 1 項目の展開後の大きさの上限（既定 1024 MB。0 = 無制限）。 |
+| `--timeout SEC` | 変換の時間の上限（秒。既定 0 = 無制限）。 |
+| `--no-limits` | 上の上限をすべて外します。`java -Xmx16g` のように十分なメモリも与えてください。 |
+| `--verbose` | 想定外のエラーの詳細（スタックトレース）を表示します。 |
+
+上限は、悪意のあるファイル（数 KB で数千万ページになるもの、展開すると巨大になる zip など）でメモリや時間を使い切られない
+ためのものです。超えると変換を中止し、緩めるオプションを表示します。
+
+### 終了コード
+
+| コード | 意味 |
+|---|---|
+| 0 | 成功 |
+| 1 | 変換できない（xlsx として読めない、パスワードが違う、想定外のエラーなど） |
+| 2 | 引数の誤り（不明なオプションなど） |
+| 3 | 上限を超えた（ページ数・zip の大きさ）、またはメモリ不足 |
+| 4 | 時間切れ（`--timeout`） |
+
+失敗したときは、途中まで書いた出力ファイルを残さず、もとからあった出力ファイルはそのまま残します。入力と出力に同じファイルを指定するとエラー (終了コード 2) になります。
+
+## フォント
+
+文字は、次の順にフォントを探して描きます。**`--font-dir` を指定しなくても、Windows のフォントフォルダは自動で参照します。**
+
+1. `--font-dir` で指定したフォルダ
+2. OS のフォントフォルダ（自動）
+   - Windows: `C:\Windows\Fonts`、ユーザーのフォント（`%LOCALAPPDATA%\Microsoft\Windows\Fonts`）
+   - WSL（Windows 上の Linux）: `/mnt/c/Windows/Fonts`
+   - macOS: `/Library/Fonts`、`~/Library/Fonts`
+   - Linux: `/usr/share/fonts`、`/usr/local/share/fonts`、`~/.fonts`、`~/.local/share/fonts`
+3. 同梱の代替フォント（`xlsx2pdf-fonts.jar`）。字幅が互換のフォントで、Excel のフォントが見つからないときに使います。
+
+| Excel のフォント | 代替フォント |
+|---|---|
+| ＭＳ ゴシック / ＭＳ Ｐゴシック / ＭＳ 明朝 / ＭＳ Ｐ明朝 | IPAゴシック / IPAPゴシック / IPA明朝 / IPAP明朝 |
+| 游ゴシック・メイリオなど / 游明朝 | IPAexゴシック / IPAex明朝 |
+| Calibri / Cambria | Carlito / Caladea |
+| Arial / Times New Roman / Courier New | Liberation Sans / Serif / Mono |
+
+Windows で Excel と同じ字形にしたい場合は、何も指定しなくて構いません。Linux サーバーなどで Excel と同じ字形にしたい場合は、
+使用許諾の範囲で Windows のフォントを用意し、`--font-dir` でそのフォルダを指定してください。HG 系のフォント（HG丸ｺﾞｼｯｸM-PRO など）や
+Century は Office に付属するフォントなので、Office の入っていない PC にはありません。
+
+`xlsx2pdf-fonts.jar` も代わりのフォントもない場合は、PC に入っている似たフォントで代用し、その旨を表示します。
+それも見つからなければ、変換を始める前に止まります。
+
+## バッチファイルやプログラムから使う
+
+### 代替フォント（xlsx2pdf-fonts.jar）の使い方
+
+**`xlsx2pdf.jar` と同じフォルダに、同じ名前のまま置くだけです。** 設定やオプションは要りません。コマンド、バッチファイル、Java プログラムのどれでも同じです。
+
+```
+フォルダ/
+├ xlsx2pdf.jar
+└ xlsx2pdf-fonts.jar
+```
+
+**必要かどうか**: 実際のフォントがあれば、そちらが使われます。代替フォントが使われるのは、フォントが PC に見つからないときだけです。
+
+| 環境 | `xlsx2pdf-fonts.jar` | 理由 |
+|---|---|---|
+| Office の入った Windows | なくても動きます | ＭＳ ゴシックや游ゴシックなどが PC にあります |
+| Linux サーバー、コンテナ | **置いてください** | Excel のフォントがありません。ほかにフォントがなければ、これがないと変換できません |
+
+**置き方ごとの動き**:
+
+| 置き方 | 結果 |
+|---|---|
+| 同じフォルダに同じ名前で置く | 使われます。`java -jar` でも、`java -cp xlsx2pdf.jar` でも同じです |
+| `xlsx2pdf-fonts.jar` の名前を変える | **使われません** |
+| `xlsx2pdf.jar` の名前を変える | 使われます |
+| 別のフォルダに置く | 下のように `-cp` で両方を指定すれば使われます。`java -cp ... -jar ...` は `-cp` が無視されるので使われません |
+
+```sh
+# Linux・macOS (区切りは :)
+java -cp lib/xlsx2pdf.jar:fonts/xlsx2pdf-fonts.jar xlsx2pdf.Main 申請書.xlsx 申請書.pdf
+```
+
+```bat
+rem Windows (区切りは ;)
+java -cp "lib\xlsx2pdf.jar;fonts\xlsx2pdf-fonts.jar" xlsx2pdf.Main 申請書.xlsx 申請書.pdf
+```
+
+自分のアプリから使うときも、`xlsx2pdf-fonts.jar` がクラスパスに入っていれば使われます。
+
+**使われているかの確かめ方**: どちらの場合も、フォントが足りないと次のメッセージで分かります。
+
+| 状態 | 動き |
+|---|---|
+| `xlsx2pdf-fonts.jar` がなく、PC に似たフォントがある | 「注意: 同梱フォント (xlsx2pdf-fonts.jar) がないため、PC のフォントで代用します」と表示して変換します |
+| `xlsx2pdf-fonts.jar` がなく、PC に似たフォントもない | 「代わりに使うフォントが見つかりません」で止まります（終了コード 1。プログラムからは `FontUnavailableException`） |
+
+どのフォントがどの代替フォントになるかは「[フォント](#フォント)」を見てください。
+
+### Windows のバッチファイル（.bat）から使う
+
+バッチファイルから `java -jar` で実行できます。先に Java 17 以上を入れ、コマンドプロンプトで `java -version` が動くことを確かめてください。
+以下の例は、`xlsx2pdf.jar`（必要なら `xlsx2pdf-fonts.jar` も）とバッチファイルを同じフォルダに置く前提です。`xlsx2pdf-fonts.jar` の指定は要りません。
+
+#### 例 1: 1 つのファイルを変換する
+
+終了コードで成功と失敗を判定します。`cd /d "%~dp0"` は、バッチファイルのあるフォルダに移動する指定です。
+
+```bat
+@echo off
+cd /d "%~dp0"
+
+java -jar xlsx2pdf.jar "申請書.xlsx" "申請書.pdf"
+if errorlevel 1 (
+    echo 変換に失敗しました。終了コード: %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
+)
+echo 変換しました
+```
+
+#### 例 2: ドラッグ＆ドロップで変換する
+
+xlsx ファイルをバッチファイルの上にドロップすると、同じフォルダに同じ名前の PDF を作ります。
+
+```bat
+@echo off
+if "%~1"=="" (
+    echo xlsx ファイルをこのバッチファイルにドロップしてください
+    pause
+    exit /b 2
+)
+
+java -jar "%~dp0xlsx2pdf.jar" "%~1" "%~dpn1.pdf"
+if errorlevel 1 pause
+```
+
+`%~1` はドロップしたファイル、`%~dpn1` はその拡張子を除いたパス、`%~dp0` はバッチファイルのあるフォルダです。失敗したときだけ `pause` で画面を残します。
+
+#### 例 3: フォルダの中をまとめて変換する
+
+`入力` フォルダの xlsx をすべて変換し、`出力` フォルダに PDF を作ります。1 件失敗しても残りを続け、最後に失敗の件数を表示します。
+
+```bat
+@echo off
+cd /d "%~dp0"
+if not exist "出力" mkdir "出力"
+
+set FAILED=0
+for %%f in ("入力\*.xlsx") do (
+    echo %%~nxf
+    java -jar xlsx2pdf.jar "%%~f" "出力\%%~nf.pdf"
+    if errorlevel 1 (
+        echo 失敗: %%~nxf
+        set /a FAILED+=1
+    )
+)
+
+echo 失敗: %FAILED% 件
+if not "%FAILED%"=="0" exit /b 1
+```
+
+#### バッチファイルでの注意点
+
+| 項目 | 内容 |
+|---|---|
+| `%` の書き方 | **`%` は `%%` と書きます。** `--screen-dpi 150%%` が正しい指定です。`150%` と書くと `%` が消えて `150` dpi の指定になり、エラーにならないまま出力が変わります。パスワードなど、ほかの引数の `%` も同じです |
+| 引用符 | 日本語や空白を含むパスは `"..."` で囲みます |
+| 文字コード | バッチファイルは Shift-JIS（メモ帳の「ANSI」）で保存します。UTF-8 で保存すると、日本語のファイル名を正しく渡せないことがあります |
+| 終了コード | `if errorlevel 1` は「終了コードが 1 以上」の意味です。コードごとに分けるときは `if %ERRORLEVEL%==3` のように書きます。`for` や `if` の括弧の中で数値を見るときは `setlocal EnableDelayedExpansion` と `!ERRORLEVEL!` を使います |
+| PDF を開いたまま | 出力先の PDF を別のアプリで開いていると書き込めず、終了コード 1 になります。開いている PDF はそのまま残ります |
+| Java が見つからない | 「'java' は、内部コマンドまたは外部コマンド…として認識されていません」と出たら、Java のパスが通っていません。`"C:\Program Files\...\bin\java.exe" -jar ...` のように Java の場所を指定しても動きます |
+
+### Java プログラムから使う
+
+```java
+import xlsx2pdf.Converter;
+import xlsx2pdf.LimitExceededException;
+import java.io.File;
+
+Converter.Options opt = new Converter.Options();
+opt.sheets.add("様式第1号");       // --sheet
+opt.timeoutSeconds = 60;            // --timeout
+// opt.screenDpi = 144;             // --screen-dpi 150%
+// opt.authorEnv = true;            // --author-env
+// opt.noLimits();                  // --no-limits
+
+try {
+    new Converter(opt).convert(new File("申請書.xlsx"), new File("申請書.pdf"));
+} catch (LimitExceededException e) {
+    // 上限を超えた・時間切れ (e.isTimeout())
+}
+```
+
+`xlsx2pdf.jar` をクラスパスに加えて使います。`xlsx2pdf-fonts.jar` は同じフォルダに置けば自動で使われます（別のフォルダならクラスパスに加えます）。
+
+### ストリームで変換する
+
+ファイルを介さずに `InputStream` から `OutputStream` へ変換できます。Web アプリでアップロードされたブックを変換して返す場合や、
+クラウドのストレージとやり取りする場合に使います。
+
+| 動き | 内容 |
+|---|---|
+| 一時ファイル | 作りません。入力を読み込み、メモリの中で PDF を完成させます |
+| 出力のタイミング | PDF が完成してから `out` に書きます。変換に失敗したときは何も書きません |
+| ストリームを閉じる | `convert` は閉じません。開いた側で閉じてください |
+| 入力の上限 | 既定で 1GB。超えると `LimitExceededException` になります（`opt.maxInputBytes` で変更） |
+| ブック名 | ストリームには名前がないので、`opt.sourceName` で渡します。ヘッダーの `&F` と PDF のタイトルに使います。省略すると `&F` は空になり、タイトルは設定されません。ヘッダーの `&Z`（パス）は常に空です |
+
+#### 例 1: ストリームの基本
+
+ファイルのストリームで書いていますが、`InputStream` と `OutputStream` であれば何でも同じです。そのまま実行できます。
+
+```java
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import xlsx2pdf.Converter;
+
+public class StreamExample {
+    public static void main(String[] args) throws Exception {
+        Converter.Options opt = new Converter.Options();
+        opt.sourceName = "申請書.xlsx";
+
+        // try-with-resources で、開いたストリームを閉じる
+        try (InputStream in = Files.newInputStream(Path.of("申請書.xlsx"));
+             OutputStream out = Files.newOutputStream(Path.of("申請書.pdf"))) {
+            new Converter(opt).convert(in, out);
+        }
+    }
+}
+```
+
+注意: `Files.newOutputStream` は開いた時点でファイルを空にするので、この例では変換に失敗すると空のファイルが残ります。
+失敗時に既存のファイルを残したいときは、`convert(File, File)` を使ってください。
+
+#### 例 2: バイト配列で受け渡す
+
+データベースやメッセージキューなど、データがバイト配列で手元にある場合です。
+
+```java
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+
+import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
+import xlsx2pdf.Converter;
+
+public class BytesExample {
+    /** xlsx のバイト列を PDF のバイト列にする。 */
+    public static byte[] toPdf(byte[] xlsx, String name) throws IOException, InvalidFormatException {
+        Converter.Options opt = new Converter.Options();
+        opt.sourceName = name;
+
+        ByteArrayOutputStream pdf = new ByteArrayOutputStream();
+        new Converter(opt).convert(new ByteArrayInputStream(xlsx), pdf);
+        return pdf.toByteArray();
+    }
+}
+```
+
+#### 例 3: Web アプリで変換して返す
+
+アップロードされたブックを PDF にして返すサーブレットです（Jakarta Servlet 5 以降）。利用者のファイルは信頼できないので、
+上限を厳しくして、失敗の種類ごとにエラーを返します。
+
+```java
+import java.io.IOException;
+import java.io.InputStream;
+
+import jakarta.servlet.ServletException;
+import jakarta.servlet.annotation.MultipartConfig;
+import jakarta.servlet.annotation.WebServlet;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.Part;
+
+import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
+import xlsx2pdf.Converter;
+import xlsx2pdf.LimitExceededException;
+
+@WebServlet("/xlsx2pdf")
+@MultipartConfig
+public class PdfServlet extends HttpServlet {
+    @Override
+    protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
+        Part upload = request.getPart("file");
+        if (upload == null) {
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "file がありません");
+            return;
+        }
+
+        // Options と Converter はリクエストごとに作る (同じ Converter を共有すると順番に処理される)
+        Converter.Options opt = new Converter.Options();
+        opt.sourceName = "upload.xlsx";          // 利用者が付けた名前をそのまま PDF に入れない
+        opt.maxInputBytes = 20L * 1024 * 1024;   // 入力は 20MB まで
+        opt.maxPages = 1000;                     // 1000 ページまで
+        opt.timeoutSeconds = 60;                 // 60 秒まで
+
+        response.setContentType("application/pdf");
+        response.setHeader("Content-Disposition", "attachment; filename=\"output.pdf\"");
+
+        try (InputStream in = upload.getInputStream()) {
+            // 成功したときだけ response に書かれる。response のストリームはサーブレットコンテナが閉じる
+            new Converter(opt).convert(in, response.getOutputStream());
+        } catch (LimitExceededException e) {
+            // 上限を超えた。e.isTimeout() なら時間切れ
+            fail(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, e.isTimeout() ? "時間切れです" : "ファイルが大きすぎます");
+        } catch (IllegalArgumentException | InvalidFormatException e) {
+            // xlsx として読めない (POI の NotOfficeXmlFileException などは IllegalArgumentException の仲間)
+            fail(response, HttpServletResponse.SC_BAD_REQUEST, "xlsx として読めないファイルです");
+        } catch (IOException e) {
+            // .xls、パスワード付きのブック、zip 爆弾の疑い、利用者との接続の切断など
+            fail(response, HttpServletResponse.SC_BAD_REQUEST, "変換できませんでした");
+        }
+    }
+
+    /** エラーを返す。PDF を送り始めた後 (接続の切断など) は返せないので何もしない。 */
+    private static void fail(HttpServletResponse response, int status, String message) throws IOException {
+        if (!response.isCommitted()) response.sendError(status, message);
+    }
+}
+```
+
+ポイント:
+
+- **エラーを返せる**: 変換に失敗したときは `response` に何も書かれていないので、ステータスコードを変えてエラーを返せます。
+- **メモリ**: 入力と完成した PDF を両方メモリに置きます。同時に変換する数とブックの大きさに合わせて、`-Xmx` を決め、同時実行数を制限してください。
+- **実行時の例外**: `LimitExceededException`、`FontUnavailableException`（使えるフォントがない）、POI の例外は実行時例外（`RuntimeException`）で、`throws` には現れません。
+- **メモリ不足**: `OutOfMemoryError` は上の例では受けていません。上限を決めて起こさないようにするのが基本です。
+
+### 同時に変換する
+
+1 つのプロセスの中で、複数の変換を同時に実行できます。スレッドごとに `Converter` を作ってください（同じ `Converter` を共有すると順番に処理します）。zip の大きさと圧縮率の上限はプロセス全体で共通で、最後に変換を始めたものの設定が使われます。同時に変換するなら、この上限は同じ値にそろえてください。
+
+## 対応している機能
+
+- **セル**: 値と表示形式（和暦・曜日・日本語の組込み書式・会計の `*` 埋め・色指定・条件付きの区画）、フォント、塗りつぶし（単色・パターン・
+  グラデーション）、罫線（全種類・斜線）、配置（折り返し・はみ出し・縮小して全体を表示・均等割り付け・選択範囲内で中央・縦書き・回転・字下げ）、
+  結合セル、リッチテキスト、条件付き書式（塗り・フォント・罫線・カラースケール・データバー）、ゼロ値の非表示、セル内のチェックボックス
+- **印刷設定**: 用紙・向き・余白・拡大縮小・次のページ数に合わせて印刷・印刷範囲（複数範囲）・印刷タイトル行/列・改ページ・ページの順序・
+  水平/垂直の中央・枠線の印刷・先頭ページ番号・白黒印刷・コメントの印刷（画面表示イメージ）
+- **ヘッダー/フッター**: 左/中央/右、ページ番号・総ページ数・日付・時刻・ファイル名・シート名・パス、フォント・大きさ・太字・斜体・下線・
+  取り消し線・上付き/下付き・色、画像、先頭ページ/奇数偶数ページ別
+- **オブジェクト**: 図形（プリセット形状すべて・ユーザー定義の形状）、線・矢印、グラデーション、影、画像（トリミング、EMF/WMF）、
+  テキストボックス、グループ、コネクタ、SmartArt、フォームコントロール（チェックボックス・オプションボタンなど）、ActiveX コントロールの画像、
+  グラフ（棒・折れ線・面・円・ドーナツ・散布図・レーダー）
+
+## 制限事項
+
+- 対応する形式は .xlsx（Office Open XML）だけです。古い .xls は対象外です。暗号化された .xlsx は `--password` で変換できます。
+- Excel の列幅・行の高さは、PDF に保存する PC の画面の表示倍率や Excel の版、選んでいるプリンタによってわずかに変わります。
+  本ツールの既定は「今の Excel で、表示倍率 100% の PC で PDF に保存した結果」です。ほかの環境に合わせたい場合は `--screen-dpi`・`--printer-dpi`・
+  `--author-env` を使ってください（「どの Excel の出力に合わせるか」）。
+- グラフは主な種類に対応していますが、細かな書式は Excel と異なる場合があります。
+- マクロ（VBA）は実行しません。数式は、ファイルに保存された計算結果を表示します。
+
+## ビルド
+
+JDK 17 以上と Maven 3.9 以上が必要です。単体テストも `mvn package` の中で実行します。
+
+```sh
+mvn package
+# target/xlsx2pdf.jar        本体
+# target/xlsx2pdf-fonts.jar  代替フォント
+```
+
+## ライセンス
+
+本ツールのソースは [MIT License](LICENSE) で公開しています。Copyright (c) 2026 tomoaki bessho。
+
+配布する jar は、次の第三者のソフトウェアやフォントを含みます。それぞれのライセンスに従います。
+
+| 含まれるもの | ライセンス | 全文の場所 |
+|---|---|---|
+| Apache POI、Apache PDFBox、Apache XMLBeans、Apache Commons、Apache Log4j API、SparseBitSet | Apache License 2.0 | `xlsx2pdf.jar` の `META-INF/third-party/` |
+| curvesapi | BSD 3-Clause License | `xlsx2pdf.jar` の `META-INF/third-party/` |
+| IPA フォント | IPA フォントライセンス v1.0 | `xlsx2pdf-fonts.jar` の `fonts/` |
+| Carlito、Caladea、Liberation | SIL Open Font License 1.1 | `xlsx2pdf-fonts.jar` の `fonts/` |
+| DejaVu Sans | Bitstream Vera ライセンスなど | `xlsx2pdf-fonts.jar` の `fonts/` |
+
+Apache License 2.0 の帰属表示 (NOTICE) は、`META-INF/third-party/NOTICE.txt` にまとめています。本ツールのライセンスは jar の直下の `LICENSE` にあります。
+
+## 商標
+
+Microsoft、Excel、Windows は Microsoft Corporation の商標です。本ツールは Microsoft とは関係のない独立したソフトウェアです。

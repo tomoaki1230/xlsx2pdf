@@ -1,0 +1,14 @@
+# プリンタの標準行のセルの高さ k (em)。フォント名 (正規化)、k。h = round(k × ppem)、行 = h + (h+4)/10 + 1
+arial	1.115
+calibri	1.174
+century	1.164
+courier new	1.091
+franklin gothic medium	1.212
+meiryo ui	1.274
+times new roman	1.135
+yu mincho	1.526
+yu mincho demibold	1.218
+yu mincho light	1.232
+游明朝	1.526
+游明朝 demibold	1.218
+游明朝 light	1.232
