@@ -183,10 +183,10 @@ public final class PrintSetup {
             String f = n.getRefersToFormula();
             if (f == null) continue;
             if ("_xlnm.Print_Area".equalsIgnoreCase(n.getNameName())) {
-                // 壊れた参照 (#REF!) を含む印刷範囲は、Excel は全体を無効として使用範囲を印刷する (夜間 n2169: A1:U72,#REF!)
+                // 壊れた参照 (#REF!) を含む印刷範囲は、Excel は全体を無効として使用範囲を印刷する (A1:U72,#REF!)
                 if (f.contains("#REF!")) continue;
                 if (f.replaceAll("'[^']*'", "").contains("(")) {   // シート名 ('3-9(1)' など) の括弧は数えない
-                    // 数式の印刷範囲 (OFFSET(…,COUNTA(…)) など。夜間 n4592): Excel は評価した範囲を印刷する
+                    // 数式の印刷範囲 (OFFSET(…,COUNTA(…)) など): Excel は評価した範囲を印刷する
                     CellRangeAddress a = evalArea(wb, sheet, f);
                     if (a != null) p.printAreas.add(a);
                     continue;

@@ -22,9 +22,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ComplexText {
     private ComplexText() {}
 
-    /** 有効か。 */
-    static final boolean ON = !"0".equals(System.getProperty("x2p.complex"));
-
     /** まとまりに割り当てるコードポイントの始まりと数 (第 16 面の私用領域)。 */
     static final int BASE = 0x100000, MAX = 0xFFFD;
 
@@ -106,7 +103,7 @@ public final class ComplexText {
 
     /** 複雑な文字体系の部分を、まとまりごとに 1 つのコードポイントへ置き換える。なければ元の文字列を返す。 */
     public static String cluster(String s) {
-        if (!ON || s == null || !hasComplex(s)) return s;
+        if (s == null || !hasComplex(s)) return s;
         StringBuilder sb = new StringBuilder(s.length());
         int n = s.length(), i = 0;
         while (i < n) {
@@ -143,22 +140,6 @@ public final class ComplexText {
             if (id < 0) sb.append(s, i, j);
             else sb.appendCodePoint(id);
             i = j;
-        }
-        return sb.toString();
-    }
-
-    /** まとまりを元の文字列に戻す (文字として取り出すとき)。 */
-    public static String plain(String s) {
-        if (s == null) return null;
-        boolean any = false;
-        for (int i = 0; i < s.length() && !any; i++) any = Character.isHighSurrogate(s.charAt(i));
-        if (!any) return s;
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < s.length(); ) {
-            int cp = s.codePointAt(i);
-            i += Character.charCount(cp);
-            if (isCluster(cp)) sb.append(text(cp));
-            else sb.appendCodePoint(cp);
         }
         return sb.toString();
     }

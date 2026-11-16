@@ -53,7 +53,7 @@ public final class ShapeText {
         double defTab = DEF_TAB;
     }
 
-    /** 既定のタブの間隔 (pt。defTabSz の既定 914400 EMU)。Excel の印刷の実測 exp63 でも 72pt ごと。 */
+    /** 既定のタブの間隔 (pt。defTabSz の既定 914400 EMU。Excel も 72pt ごと)。 */
     static final double DEF_TAB = 72;
 
     /** 段落のタブ位置 (基準は文字の枠の左端。最後のタブ位置より右は既定の間隔の倍数)。 */
@@ -345,12 +345,6 @@ public final class ShapeText {
         return dflt;
     }
 
-    /**
-     * 行のアセント・ディセントを、文字を描く書体で決め直す: CJK の文字のあるランは欧文と和文の大きい方、ないランは欧文の
-     * 書体だけ (textAscent)。
-     */
-    static final boolean SHAPE_LINE = !"0".equals(System.getProperty("x2p.shapeline"));
-
     private static void textMetrics(TextLayout.Line l) {
         if (l.runs.isEmpty()) return;
         float a = 0, d = 0;
@@ -358,16 +352,10 @@ public final class ShapeText {
         for (TextLayout.Run r : l.runs) {
             if (r.tabW >= 0) continue;
             boolean cjk = r.text.codePoints().anyMatch(FontManager::isCjk);
-            if (SHAPE_LINE) {
-                // Excel の図形の行: 和文の書体は 1.3 倍、欧文の書体は hhea + lineGap。欧文の書体の中の和文の文字は代わりの和文の書体の行
-                boolean fb = cjk && !r.spec.eaFont;
-                a = Math.max(a, (fb ? Math.max(FontManager.EA_FALLBACK_ASC, r.spec.lineAsc) : r.spec.lineAsc) * r.size);
-                d = Math.max(d, (fb ? Math.max(FontManager.EA_FALLBACK_DESC, r.spec.lineDesc) : r.spec.lineDesc) * r.size);
-                any = true;
-                continue;
-            }
-            a = Math.max(a, (cjk ? r.spec.ascent : r.spec.textAscent) * r.size);
-            d = Math.max(d, (cjk ? r.spec.descent : r.spec.textDescent) * r.size);
+            // Excel の図形の行: 和文の書体は 1.3 倍、欧文の書体は hhea + lineGap。欧文の書体の中の和文の文字は代わりの和文の書体の行
+            boolean fb = cjk && !r.spec.eaFont;
+            a = Math.max(a, (fb ? Math.max(FontManager.EA_FALLBACK_ASC, r.spec.lineAsc) : r.spec.lineAsc) * r.size);
+            d = Math.max(d, (fb ? Math.max(FontManager.EA_FALLBACK_DESC, r.spec.lineDesc) : r.spec.lineDesc) * r.size);
             any = true;
         }
         if (any) { l.ascent = a; l.descent = d; }
@@ -408,8 +396,8 @@ public final class ShapeText {
             } else if (p.runs.isEmpty()) {
                 lines = new ArrayList<>();
                 TextLayout.Line l = new TextLayout.Line();
-                l.ascent = (SHAPE_LINE ? p.endSpec.lineAsc : p.endSpec.ascent) * p.endSize;
-                l.descent = (SHAPE_LINE ? p.endSpec.lineDesc : p.endSpec.descent) * p.endSize;
+                l.ascent = p.endSpec.lineAsc * p.endSize;
+                l.descent = p.endSpec.lineDesc * p.endSize;
                 l.endsParagraph = true;
                 lines.add(l);
             } else {
@@ -420,8 +408,8 @@ public final class ShapeText {
             for (int li = 0; li < lines.size(); li++) {
                 TextLayout.Line l = lines.get(li);
                 if (l.runs.isEmpty() && l.ascent == 0) {
-                    l.ascent = (SHAPE_LINE ? p.endSpec.lineAsc : p.endSpec.ascent) * p.endSize;
-                    l.descent = (SHAPE_LINE ? p.endSpec.lineDesc : p.endSpec.descent) * p.endSize;
+                    l.ascent = p.endSpec.lineAsc * p.endSize;
+                    l.descent = p.endSpec.lineDesc * p.endSize;
                 }
                 double lh = lineHeight(l, p.endSize);
                 double pitch = p.lnSpcPts > 0 ? p.lnSpcPts : lh * Math.max(0.1, p.lnSpcPct - lnReduce);

@@ -116,7 +116,7 @@ public final class Converter {
         public long maxZipEntryBytes = 1L << 30;
         /** xlsx (zip) の項目の数の上限。既定 100,000 (POI の既定 1,000 は、数百のシートがある実際のブックで足りない)。0 以下は無制限。 */
         public long maxZipEntries = 100_000;
-        /** xlsx (zip) の項目の圧縮率の下限 (展開後に対する圧縮後の比。小さすぎるものは zip 爆弾とみなす)。既定 0.005 (POI の既定 0.01 では、Excel が開く書式の多いブックの styles.xml (先頭の比 0.008。夜間 n4404・n5837) を拒むため)。 */
+        /** xlsx (zip) の項目の圧縮率の下限 (展開後に対する圧縮後の比。小さすぎるものは zip 爆弾とみなす)。既定 0.005 (POI の既定 0.01 では、Excel が開く書式の多いブックの styles.xml (先頭の比 0.008)。 */
         public double minInflateRatio = 0.005;
         /** 変換の時間の上限 (秒)。既定 0 = 無制限。 */
         public long timeoutSeconds;
@@ -556,9 +556,6 @@ public final class Converter {
         org.apache.poi.util.IOUtils.setByteArrayMaxOverride(opt.maxZipEntryBytes <= 0 ? Integer.MAX_VALUE - 8 : -1);
     }
 
-    /** Strict OOXML のブックを読む (名前空間を書き換える)。 */
-    static final boolean STRICT_OOXML = !"0".equals(System.getProperty("x2p.strict"));
-
     private OPCPackage openPackage(File in) throws IOException, InvalidFormatException {
         FileMagic magic;
         try (InputStream is = FileMagic.prepareToCheckMagic(new java.io.BufferedInputStream(new java.io.FileInputStream(in)))) {
@@ -566,17 +563,15 @@ public final class Converter {
         }
         if (magic != FileMagic.OLE2) {
             // Strict OOXML は名前空間を通常の形に書き換えてから開く
-            if (STRICT_OOXML) {
-                boolean strict;
+            boolean strict;
+            try (InputStream is = new java.io.BufferedInputStream(new java.io.FileInputStream(in))) {
+                strict = StrictOoxml.isStrict(is, opt.maxZipEntryBytes);
+            } catch (IOException | RuntimeException e) {
+                strict = false;
+            }
+            if (strict) {
                 try (InputStream is = new java.io.BufferedInputStream(new java.io.FileInputStream(in))) {
-                    strict = StrictOoxml.isStrict(is, opt.maxZipEntryBytes);
-                } catch (IOException | RuntimeException e) {
-                    strict = false;
-                }
-                if (strict) {
-                    try (InputStream is = new java.io.BufferedInputStream(new java.io.FileInputStream(in))) {
-                        return OPCPackage.open(new java.io.ByteArrayInputStream(StrictOoxml.toTransitional(is, opt.maxZipEntryBytes, 1L << 30)));
-                    }
+                    return OPCPackage.open(new java.io.ByteArrayInputStream(StrictOoxml.toTransitional(is, opt.maxZipEntryBytes, 1L << 30)));
                 }
             }
             return OPCPackage.open(in, PackageAccess.READ);
@@ -594,12 +589,10 @@ public final class Converter {
         }
         if (magic != FileMagic.OLE2) {
             byte[] conv = null;
-            if (STRICT_OOXML) {
-                try {
-                    conv = StrictOoxml.convertIfStrict(book, opt.maxZipEntryBytes);
-                } catch (RuntimeException e) {
-                    conv = null;
-                }
+            try {
+                conv = StrictOoxml.convertIfStrict(book, opt.maxZipEntryBytes);
+            } catch (RuntimeException e) {
+                conv = null;
             }
             return OPCPackage.open(new java.io.ByteArrayInputStream(conv != null ? conv : book));
         }
@@ -736,7 +729,6 @@ public final class Converter {
             int lc = new CellPainter(ctx, layout, ps, new CondFormat(ctx, sheet)).overflowLastColumn(a.getLastRow(), a.getLastColumn(), a.getLastColumn() + OV_RANGE_COLS);
             if (lc > a.getLastColumn()) areas.set(0, new CellRangeAddress(a.getFirstRow(), a.getLastRow(), a.getFirstColumn(), lc));
         }
-        if (System.getProperty("x2p.dbgarea") != null) System.err.println("AREA " + sheet.getSheetName() + " used=" + java.util.Arrays.toString(used) + " dext=" + java.util.Arrays.toString(dext) + " areas=" + areas);
         Paginator paginator = new Paginator(layout, ps);
         if (ps.headings && ctx.defaultFontName != null)
             paginator.digitAdvance = ctx.fonts.spec(ctx.defaultFontName, false, false).charWidth('0', (float) ctx.defaultFontSize, ctx.fonts);
@@ -773,16 +765,9 @@ public final class Converter {
         return new SheetJob(sheet, index, ps, layout, pages, dp, false);
     }
 
-    /** 白紙の判定で、結合範囲の左上のセルがあれば中身とみなす (値や罫線がなくても。使用範囲の規則と同じ。夜間 n1111・n0792)。 */
-    static final boolean MERGE_CONTENT = true;
-    static final int MERGE_SPAN = Integer.getInteger("x2p.mspan", 4);
-
-    /** 白紙の判定で、ページの先頭行のセル自身の上の罫線は前のページと共有する辺でも中身と数える (1)。左の罫線は数えない (夜間 n0278)。 */
-    static final int SHARED_EDGE = 1;
-
     /**
      * 白紙のページは、シートの最後 (印刷の順) に続くものだけを省く。後ろに中身のあるページがある白紙は印刷する
-     * (夜間 n0172・n0355・n0565・n0033 など。帯ごとに末尾を省く形より合う)。
+     * (帯ごとに末尾を省く形より合う)。
      */
     private static boolean laterFull(boolean[] full, int i) {
         for (int j = i + 1; j < full.length; j++) if (full[j]) return true;
@@ -797,7 +782,7 @@ public final class Converter {
         Paginator.Segment b = null;
         for (Paginator.Segment s : p.segments) if (s.body) b = s;
         if (b == null) return false;
-        int ar0 = b.area == null ? 0 : b.area.getFirstRow(), ac0 = b.area == null ? 0 : b.area.getFirstColumn();
+        int ac0 = b.area == null ? 0 : b.area.getFirstColumn();
         for (int r = b.r0; r <= b.r1; r++) {
             if (L.rh(r) <= 0) continue;
             XSSFRow row = sheet.getRow(r);
@@ -811,21 +796,19 @@ public final class Converter {
                 if (st == null) continue;
                 if (st.getFillPattern() != FillPatternType.NO_FILL || CellPainter.hasGradient(cell)) return false;
                 if (st.getBorderBottom() != BorderStyle.NONE || st.getBorderRight() != BorderStyle.NONE) return false;
-                if (st.getBorderTop() != BorderStyle.NONE && (r > b.r0 || r == ar0 || SHARED_EDGE >= 1)) return false;
-                if (st.getBorderLeft() != BorderStyle.NONE && (c > b.c0 || c == ac0 || SHARED_EDGE >= 2)) return false;
+                if (st.getBorderTop() != BorderStyle.NONE) return false;
+                if (st.getBorderLeft() != BorderStyle.NONE && (c > b.c0 || c == ac0)) return false;
             }
         }
-        if (MERGE_CONTENT) {
-            // 結合範囲 (値や罫線がなくても) の左上のセルがあるページは白紙としない (夜間 n1111)
-            for (CellRangeAddress m : sheet.getMergedRegions()) {
-                int mr = m.getFirstRow(), mc = m.getFirstColumn();
-                if (mr >= b.r0 && mr <= b.r1 && mc >= b.c0 && mc <= b.c1 && L.rh(mr) > 0 && L.cw(mc) > 0) return false;
-                // 値のある結合範囲が前のページから続くなら、文字の続きが載るので白紙としない (夜間 n1221)
-                if (MERGE_SPAN > 0 && m.getLastRow() >= b.r0 && mr <= b.r1 && m.getLastColumn() >= b.c0 && mc <= b.c1) {
-                    XSSFRow tr = sheet.getRow(mr);
-                    XSSFCell tc = tr == null ? null : tr.getCell(mc);
-                    if (tc != null && !CellPainter.isEmptyCell(tc) && (MERGE_SPAN == 1 || MERGE_SPAN == 3 && mc < b.c0 && mr >= b.r0 || MERGE_SPAN == 4 && mc < b.c0 || mergedTextReaches(L, m, tc, b))) return false;
-                }
+        // 結合範囲 (値や罫線がなくても) の左上のセルがあるページは白紙としない
+        for (CellRangeAddress m : sheet.getMergedRegions()) {
+            int mr = m.getFirstRow(), mc = m.getFirstColumn();
+            if (mr >= b.r0 && mr <= b.r1 && mc >= b.c0 && mc <= b.c1 && L.rh(mr) > 0 && L.cw(mc) > 0) return false;
+            // 値のある結合範囲が前のページから続くなら、文字の続きが載るので白紙としない
+            if (m.getLastRow() >= b.r0 && mr <= b.r1 && m.getLastColumn() >= b.c0 && mc <= b.c1) {
+                XSSFRow tr = sheet.getRow(mr);
+                XSSFCell tc = tr == null ? null : tr.getCell(mc);
+                if (tc != null && !CellPainter.isEmptyCell(tc) && (mc < b.c0 || mergedTextReaches(L, m, tc, b))) return false;
             }
         }
         boolean o = dp.hasObjectIn(b.r0, b.c0, b.r1, b.c1);
@@ -912,7 +895,7 @@ public final class Converter {
         return pages;
     }
 
-    /** コメントの一覧の倍率: Excel はシートの印刷の倍率 (拡大縮小・1 ページに合わせる) で描く (rand30 rd15・rd23、exp124 cmt_*)。 */
+    /** コメントの一覧の倍率: Excel はシートの印刷の倍率 (拡大縮小・1 ページに合わせる) で描く。 */
     private static double noteScale(SheetJob j) {
         return j.pages.isEmpty() || !(j.pages.get(0).scale > 0) ? 1 : j.pages.get(0).scale;
     }
@@ -931,7 +914,7 @@ public final class Converter {
         double mediaW = snap ? Math.rint(ps.paperW * 600 / 72) * 0.12 : ps.paperW, mediaH = snap ? Math.rint(ps.paperH * 600 / 72) * 0.12 : ps.paperH;
         PDPage page = new PDPage(new PDRectangle((float) mediaW, (float) mediaH));
         doc.addPage(page);
-        try (PdfCanvas cv = new PdfCanvas(doc, page, ctx.fonts, ctx.images)) {
+        try (PdfCanvas cv = new PdfCanvas(doc, page, ctx.fonts)) {
             cv.save();
             double k = noteScale(j);
             hf.paint(cv, ps, ps.paperW, ps.paperH, k, pageInSheet, pageNo, total, j.sheet.getSheetName());
@@ -951,7 +934,7 @@ public final class Converter {
         }
     }
 
-    /** グラフシートのグラフは印刷範囲より幅 0.1in・高さ 9pt 小さい (左上をそろえる。Excel の印刷 exp124 cs_*・exp122 chartsheet) */
+    /** グラフシートのグラフは印刷範囲より幅 0.1in・高さ 9pt 小さい (左上をそろえる) */
     static final double CS_DW = 7.2, CS_DH = 9;
 
     /** コメントの一覧の見出しと文字の間 (pt)。 */
@@ -973,7 +956,7 @@ public final class Converter {
         double mediaW = snap ? Math.rint(ps.paperW * 600 / 72) * 0.12 : ps.paperW, mediaH = snap ? Math.rint(ps.paperH * 600 / 72) * 0.12 : ps.paperH;
         PDPage page = new PDPage(new PDRectangle((float) (mediaW / pageScale), (float) (mediaH / pageScale)));
         doc.addPage(page);
-        try (PdfCanvas cv = new PdfCanvas(doc, page, ctx.fonts, ctx.images)) {
+        try (PdfCanvas cv = new PdfCanvas(doc, page, ctx.fonts)) {
             if (pageScale != 1) cv.scale(1 / pageScale, 1 / pageScale);
             // Microsoft Print to PDF は画素を 用紙の pt ÷ (画素数 − 1) で変換する (A4: 横 4960 画素、縦 7016 画素。全倍率の罫線の実測)
             if (snap) {
@@ -1024,7 +1007,7 @@ public final class Converter {
                     cp.paint(cv, s);
                     cv.mirrorText = false;
                     if (s.body && !ps.draft) {
-                        // 図形・グラフの切り抜きは外側に約 0.44pt (用紙上。Excel の印刷 exp79・exp49: ページの右端で切れる位置)
+                        // 図形・グラフの切り抜きは外側に約 0.44pt (用紙上。ページの右端で切れる位置)
                         double ed = DRAWING_CLIP / pg.scale;
                         cv.clipRect(sx - ed, sy - ed, w + 2 * ed, h + 2 * ed);
                         j.drawings.paint(cv, sx, sy, sx + w, sy + h); // 簡易印刷は図形・グラフを印刷しない

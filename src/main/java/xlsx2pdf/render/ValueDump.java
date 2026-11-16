@@ -6,7 +6,7 @@ import java.util.List;
 /**
  * 配置の数値の書き出し (開発用)。システムプロパティ xlsx2pdf.dumpValues があるとき、変換ごとに
  * 「出力の PDF のパス + .values.tsv」へ、Excel の scripts/dump-excel.ps1 と同じ形 (シート<TAB>種類<TAB>値...) で書く。
- * Excel の値と突き合わせて、ずれた箇所を自動で探すために使う (設計書 12.2)。
+ * Excel の値と突き合わせて、ずれた箇所を自動で探すために使う。
  */
 public final class ValueDump {
     /** 書き出すか。 */

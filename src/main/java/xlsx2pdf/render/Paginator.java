@@ -87,7 +87,6 @@ public final class Paginator {
     /**
      * 線形に縮小する許容幅 (%): 新しいブック (lastEdited ≥ 7 か不明) は、保存された倍率が線形の計算値より 1 小さくてもよい。
      * 収まり具合がきわどいと、作成した PC の計算は 1% 小さくなる。
-     * 許容幅 0: x21 0.7552・webnew 0.8477・webold 0.9285、1 (新しいブックだけ): 0.7570・0.8507・0.9285、1 (すべて): 0.7586・0.8492・0.9281。
      */
     static final int FITLIN_TOL = 1;
     static final double FIT_TIGHT_DEFAULT = 0.0012;
@@ -129,7 +128,7 @@ public final class Paginator {
     public List<Page> paginate(List<CellRangeAddress> areas) {
         if (ps.headings) {
             // 行列番号の印刷: 列の見出しの高さはシートの標準の行の高さ。行番号の列の幅は (桁数 + 0.75) × 標準フォントの数字の送り幅。
-            // 桁数は最後の行の番号 (1 始まり) の桁数で、3 桁以下は同じ (Excel の印刷 exp80: 8 種類のフォント・大きさで 0.4pt 以内)
+            // 桁数は最後の行の番号 (1 始まり) の桁数で、3 桁以下は同じ (8 種類のフォント・大きさで 0.4pt 以内)
             int last = 0;
             for (CellRangeAddress a : areas) last = Math.max(last, a.getLastRow() + 1);
             int digits = Math.max(3, String.valueOf(last).length());
@@ -146,7 +145,7 @@ public final class Paginator {
             boolean stored = ps.scaleSet && ps.scale <= 100;
             int le = L.model().lastEdited;
             boolean oldBook = le > 0 && le <= 6;
-            L.linear = FIT_REAL == 0;
+            L.linear = true;
             long lin = Math.round(fitScale(areas) * 100);
             int tol = oldBook ? 0 : FITLIN_TOL;
             L.linear = stored && ps.scale <= lin && ps.scale >= lin - tol;
@@ -171,7 +170,6 @@ public final class Paginator {
 
     /**
      * 最後に保存した Excel が古い (縮小印刷でフォントを実体化し直す) か。既定は AppVersion ≤ 15 (2013 以前)。
-     * x21 / webnew / webold: 判定なし 0.8169 / 0.8532 / 0.7775、AppVersion 0.7756 / 0.8533 / 0.9278、lastEdited ≤ 6 0.7655 / 0.8459 / 0.9285。
      */
     private boolean legacyExcel() {
         PrinterModel m = L.model();
@@ -251,10 +249,6 @@ public final class Paginator {
         try { return fitScale0(areas); } finally { inFit = false; fitShrink = 1; }
     }
 
-    static final boolean DBG_FIT = System.getProperty("x2p.dbgfit") != null;
-    /** 「ページに合わせる」の倍率を、実体化した寸法 (倍率ごとのフォントの標準行の比) で判定する (試験用。0 = 線形)。 */
-    static final int FIT_REAL = Integer.getInteger("x2p.fitreal", 0);
-
     private double fitScale0(List<CellRangeAddress> areas) {
         int fw = ps.fitW, fh = ps.fitH;
         for (int s = 100; s >= 10; s--) {
@@ -265,10 +259,9 @@ public final class Paginator {
                 colOver = rowOver = false;
                 int wide = colBands(a, sc).size();
                 int tall = rowBands(a, sc).size();
-                if (DBG_FIT && s >= 70 && s <= 95) System.err.println("FIT " + s + " area=" + a.formatAsString() + " wide=" + wide + " tall=" + tall + " colOver=" + colOver + " rowOver=" + rowOver + " availH=" + availH() + " y(last+1)=" + L.y(a.getLastRow() + 1) + " y(first)=" + L.y(a.getFirstRow()) + " hdrH=" + hdrH + " rh0-3=" + L.rh(0) + "," + L.rh(1) + "," + L.rh(2) + "," + L.rh(22) + " ratio=" + L.dbgInfo() + " y41=" + L.y(41) + " y40=" + L.y(40) + " y38=" + L.y(38));
                 if ((fw > 0 && (wide > fw || colOver)) || (fh > 0 && (tall > fh || rowOver))) { ok = false; break; }
-                // 丸める前の 100% の幅の合計から求めた倍率の四捨五入が上限 (Fableレポート B: 試験 fb-t2 の fit 78 件中 77 件)
-                if (FIT_RAW_W && fw > 0) {
+                // 丸める前の 100% の幅の合計から求めた倍率の四捨五入が上限
+                if (fw > 0) {
                     rawPass = true;
                     try {
                         if (colBands(a, sc).size() > fw) { ok = false; break; }
@@ -283,29 +276,21 @@ public final class Paginator {
         return 0.1;
     }
 
-    /** 「ページに合わせる」の倍率を求めるときは、行タイトルの高さを途中から始まるページ (タイトル行より前から始まるページ) にも足す (夜間 n1801)。 */
-    static final int TITLE_ALL = 1;
-    /** 列タイトルも同じ: 倍率を求めるときは、どのページにも列タイトルの幅を足す (夜間 n2686)。 */
-    static final boolean TITLE_COLS_FIT = true;
-
     /** 行タイトルの高さ (pt)。タイトル行より後から始まるページにだけ付く。 */
     private double titleRowsH(int bandStart) {
         CellRangeAddress t = ps.titleRows;
         if (t == null) return 0;
-        if (bandStart <= t.getLastRow() && !(TITLE_ALL == 2 || (TITLE_ALL == 1 && inFit))) return 0;
-        if (bandStart >= t.getFirstRow() && bandStart <= t.getLastRow() && !(FIT_TITLE_FIRST && inFit)) return 0;
+        if (bandStart <= t.getLastRow() && !inFit) return 0;
+        if (bandStart >= t.getFirstRow() && bandStart <= t.getLastRow() && !inFit) return 0;
         return (L.y(t.getLastRow() + 1) - L.y(t.getFirstRow()));
     }
-
-    /** 「ページに合わせる」の倍率を求めるときは、タイトル行から始まる最初のページにも行タイトルの高さを足す (二重に数える。exp127 fit1x1_tt_tall・fit1x3_tt)。 */
-    static final boolean FIT_TITLE_FIRST = true;
 
     /** 列タイトルの幅 (pt)。タイトル列より後から始まるページにだけ付く。 */
     private double titleColsW(int bandStart) {
         CellRangeAddress t = ps.titleCols;
         if (t == null) return 0;
-        if (bandStart <= t.getLastColumn() && !(TITLE_COLS_FIT && inFit)) return 0;
-        if (bandStart >= t.getFirstColumn() && bandStart <= t.getLastColumn() && !(TITLE_COLS_FIT && inFit)) return 0;
+        if (bandStart <= t.getLastColumn() && !inFit) return 0;
+        if (bandStart >= t.getFirstColumn() && bandStart <= t.getLastColumn() && !inFit) return 0;
         return L.x(t.getLastColumn() + 1) - L.x(t.getFirstColumn());
     }
 
@@ -333,7 +318,7 @@ public final class Paginator {
                 if (r > start && h + rh > limit + (exact ? 1e-6 : L.model().authorEnv && (scale < 1) ? -ROW_STRICT : 0.01)) {
                     break;
                 }
-                if (r == start && inFit && ONE_OVER > 1 && rh > limit + 1e-6) rowOver = true;
+                if (r == start && inFit && rh > limit + 1e-6) rowOver = true;
                 h += rh;
                 r++;
             }
@@ -351,11 +336,9 @@ public final class Paginator {
 
     /** 倍率の上限の 2 回目の判定 (丸める前の幅と「倍率 − 0.5%」) の最中か。 */
     private boolean rawPass;
-    static final boolean FIT_RAW_W = !"0".equals(System.getProperty("x2p.fitw"));
 
     /** 「ページに合わせる」の判定で、1 列 (1 行) だけで使える幅 (高さ) を超えたか。Excel はその列も収まるまで縮小する。 */
     private boolean colOver, rowOver;
-    static final int ONE_OVER = 2;
 
     /** 列をページの幅で区切る (手動改ページと列タイトルを考慮)。 */
     private List<Band> colBands(CellRangeAddress a, double scale) {
@@ -377,7 +360,7 @@ public final class Paginator {
                 if (c > start && manual && ps.colBreaks.contains(c)) break;
                 double cw = raw ? L.cw100(c) : pageCeil(L.cw(c), scale, ps.hdpi);
                 if (c > start && w + cw > limit + (exact ? 1e-6 : !L.model().authorEnv ? COL_TOL : 0.01)) break;
-                if (c == start && inFit && ONE_OVER > 0 && cw > limit + 1e-6) colOver = true;
+                if (c == start && inFit && cw > limit + 1e-6) colOver = true;
                 w += cw;
                 c++;
             }
@@ -407,14 +390,12 @@ public final class Paginator {
         return out;
     }
 
-    static final boolean ZERO_MANUAL = true;
-
     /** 行・列の範囲からページを作って追加する (大きさが 0 のページ (すべて非表示) は作らない)。 */
     private void addPage(List<Page> out, CellRangeAddress a, Band rb, Band cb, double scale) {
         double bodyH = L.y(rb.b + 1) - L.y(rb.a);
         double bodyW = L.x(cb.b + 1) - L.x(cb.a);
-        // 手動の改ページで始まる帯は、すべて非表示でも Excel は (空の) ページを印刷する (夜間 n2351: 改ページの右が非表示の列だけ)
-        boolean manualStart = ZERO_MANUAL && (manualCols() && ps.colBreaks.contains(cb.a) && bodyH > 0
+        // 手動の改ページで始まる帯は、すべて非表示でも Excel は (空の) ページを印刷する (改ページの右が非表示の列だけ)
+        boolean manualStart = (manualCols() && ps.colBreaks.contains(cb.a) && bodyH > 0
                 || manualRows() && ps.rowBreaks.contains(rb.a) && bodyW > 0);
         if ((bodyH <= 0 || bodyW <= 0) && !manualStart) return;
         Page p = new Page();

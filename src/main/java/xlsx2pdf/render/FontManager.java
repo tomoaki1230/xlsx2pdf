@@ -137,11 +137,11 @@ public final class FontManager {
         public final String requested;
         /**
          * 図形の文字で、CJK の文字のない行に使うアセント・ディセント (em)。欧文の書体だけの値 (和文の書体を混ぜない。
-         * USE_TYPO_METRICS の書体は typo の値)。Excel の印刷の実測 exp63 (Aptos Narrow 11pt の行送り 13.44pt)。
+         * USE_TYPO_METRICS の書体は typo の値。Aptos Narrow 11pt の行送りは 13.44pt)。
          */
         public float textAscent, textDescent;
         /**
-         * 図形の文字の 1 行の基線より上・下 (em。Excel の実測 fb-tb: 20 書体 × 12・20pt)。和文の書体は高さが
+         * 図形の文字の 1 行の基線より上・下 (em。20 書体 × 12・20pt)。和文の書体は高さが
          * (winAscent + winDescent) × 1.3 で、余りの 0.3 は上下に半分ずつ。欧文の書体は hhea のアセント + lineGap が上、ディセントが下。
          */
         public float lineAsc, lineDesc;
@@ -236,7 +236,7 @@ public final class FontManager {
         /** 1 文字の送り幅 (pt。合成太字とピクセル格子への吸着を含む)。 */
         public float charWidth(int cp, float size, FontManager fm) {
             if (cp == '\n' || cp == '\r') return 0;
-            // 数字幅の空白 (分数の ? の空き): そのフォントの数字の幅 (U+2007 の字形がないフォントでも。Excel の印刷 exp91 の ＭＳ Ｐゴシック)
+            // 数字幅の空白 (分数の ? の空き): そのフォントの数字の幅 (U+2007 の字形がないフォントでも)
             if (cp == 0x2007) return charWidth('0', size, fm);
             if (isPad(cp)) return charWidth(cp - PAD_BASE, size, fm);
             Face f = faceFor(cp, fm);
@@ -336,7 +336,7 @@ public final class FontManager {
     /** 格子への吸着が有効か。 */
     public static boolean gridActive() { return GRID.get() != null; }
 
-    // ---- 実際の Windows フォントの GDI 寸法 (リソース fontmetrics.tsv。Tools fonttable で生成) ----
+    // ---- 実際の Windows フォントの GDI 寸法 (リソース fontmetrics.tsv) ----
     /** 正規化したフォント名 → {unitsPerEm, winAscent, winDescent, 最大数字送り幅}。 */
     private static final Map<String, int[]> GDI = new HashMap<>();
 
@@ -697,8 +697,8 @@ public final class FontManager {
     }
 
     /**
-     * Windows (この PC の Excel の環境) にある書体名か。fontmetrics.tsv・screenrows.tsv にある名前、Windows の FontSubstitutes の名前、
-     * フルネーム (ファミリー名 + スタイル: 「UD デジタル 教科書体 NK-R」など) をあるとみなす (Fableレポート A)。
+     * Windows (Excel の環境) にある書体名か。fontmetrics.tsv・screenrows.tsv にある名前、Windows の FontSubstitutes の名前、
+     * フルネーム (ファミリー名 + スタイル: 「UD デジタル 教科書体 NK-R」など) をあるとみなす。
      */
     public static boolean installed(String name) {
         if (name == null) return false;
@@ -712,8 +712,8 @@ public final class FontManager {
 
     /**
      * ファミリー名ではなく、スタイル付きの名前 (「UD デジタル 教科書体 NK-R」など) でだけ見つかる書体名か。
-     * Excel は、この形の名前を charset の指定がなく family の指定があるときには見つけられない (試験 fb3-b1 ud_*: family 1・charset なしは
-     * Times New Roman + ＭＳ 明朝、charset 128 か family なしなら UD デジタル 教科書体 NK-R。夜間 n4795 の JUST Calc のブック)。
+     * Excel は、この形の名前を charset の指定がなく family の指定があるときには見つけられない (family 1・charset なしは
+     * Times New Roman + ＭＳ 明朝、charset 128 か family なしなら UD デジタル 教科書体 NK-R)。
      */
     public static boolean fullNameOnly(String name) {
         if (name == null) return false;
@@ -723,12 +723,12 @@ public final class FontManager {
         return installed(name);
     }
 
-    /** Office のクラウドフォント (Windows にはないが Excel が取得して使う。exp9c・exp20・exp37)。 */
+    /** Office のクラウドフォント (Windows にはないが Excel が取得して使う)。 */
     private static final java.util.Set<String> CLOUD_FONTS = java.util.Set.of("aptos", "aptos narrow", "aptos display", "seaford");
 
     /**
      * Windows + Office にある書体名 (winfonts.txt。日本語名と英語名)。画面の行の表 (screenrows.tsv) には、ない書体を Excel が
-     * 置き換えた結果の行 (IPA Pゴシック・ＭＳゴシックなど) も入っているので、判定には使わない (Fableレポート2 の 1)。
+     * 置き換えた結果の行 (IPA Pゴシック・ＭＳゴシックなど) も入っているので、判定には使わない。
      */
     private static final java.util.Set<String> WIN_FONTS = new java.util.HashSet<>();
     static {
@@ -745,7 +745,7 @@ public final class FontManager {
     private static final java.util.Set<String> WIN_SUBST = java.util.Set.of("ゴシック", "helvetica", "helv", "tms rmn",
             "times", "courier", "ms shell dlg", "ms shell dlg 2", "ms sans serif", "ms serif");
 
-    /** Mac の Osaka を Windows で置き換える書体 (日本語の等幅系 → ＭＳ ゴシック。夜間 a0b3d2faad の 5 件など)。 */
+    /** Mac の Osaka を Windows で置き換える書体 (日本語の等幅系 → ＭＳ ゴシック)。 */
     static final String OSAKA_ALIAS = "ms ゴシック";
 
     /** 古い和文フォント名の別名と、空白の抜けた表記。 */
@@ -884,7 +884,7 @@ public final class FontManager {
     public PDType0Font pdfFont(Face f) throws IOException {
         if (f.pdf == null) {
             // GSUB (合字など) は使わない: Excel はセルの文字に合字を使わず、PDFBox の Latin の GSUB は
-            // 文字列ごとに正規表現を作り直すので、文字の多いシートで極端に遅くなる (夜間 n1313 で 5 分超)
+            // 文字列ごとに正規表現を作り直すので、文字の多いシートで極端に遅くなる
             f.ttf.setEnableGsub(false);
             f.pdf = PDType0Font.load(doc, f.ttf, true);
         }

@@ -40,7 +40,7 @@ public final class Theme {
         ThemesTable tt = wb.getTheme();
         if (tt == null) {
             // テーマのないブック (Apache POI などで作ったもの) は、日本語版の Excel の既定のテーマの日本語の書体になる。
-            // テーマのフォント (scheme) のセルは、名前 (Calibri・ＭＳ ゴシックなど) によらず游ゴシックで描かれる (exp108)
+            // テーマのフォント (scheme) のセルは、名前 (Calibri・ＭＳ ゴシックなど) によらず游ゴシックで描かれる
             missing = true;
             return;
         }
@@ -138,7 +138,7 @@ public final class Theme {
     /** Excel の濃淡 (tint): HLS の輝度を調整する (負なら暗く、正なら明るく)。 */
     public static Color applyTint(Color c, double tint) {
         // Excel の濃淡は 4 桁の値として効く。HLS は Windows の整数の変換 (HLSMAX = 240) で、輝度は切り捨て
-        // (Excel の印刷 exp77: accent1 +0.6 → 83CCEB、accent2 −0.25 → BE5014 と一致。小数の HLS では 1〜3 ずれる)
+        // (accent1 +0.6 → 83CCEB、accent2 −0.25 → BE5014 と一致。小数の HLS では 1〜3 ずれる)
         tint = Math.round(tint * 10000) / 10000.0;
         int[] hls = winRgbToHls(c.getRed(), c.getGreen(), c.getBlue());
         double l = tint < 0 ? hls[1] * (1 + tint) : hls[1] * (1 - tint) + HLSMAX * tint;
@@ -285,7 +285,7 @@ public final class Theme {
                 case "lumMod" -> { double[] h = rgbToHls(c); h[1] *= v; c = hlsToRgb(h, 255); }
                 case "lumOff" -> { double[] h = rgbToHls(c); h[1] += v; c = hlsToRgb(h, 255); }
                 case "satMod" -> { double[] h = rgbToHls(c); h[2] *= v; c = hlsToRgb(h, 255); }
-                // tint・shade は線形の RGB で (Office と同じ。exp47 smartart2 の accent1 tint 40% が Excel の印刷の色に合う)
+                // tint・shade は線形の RGB で (Office と同じ)
                 case "tint" -> c = new Color(fromLinear(1 - (1 - toLinear(c.getRed())) * v), fromLinear(1 - (1 - toLinear(c.getGreen())) * v),
                         fromLinear(1 - (1 - toLinear(c.getBlue())) * v));
                 case "shade" -> c = new Color(fromLinear(toLinear(c.getRed()) * v), fromLinear(toLinear(c.getGreen()) * v),

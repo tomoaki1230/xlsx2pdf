@@ -63,7 +63,7 @@ final class VmlControls {
     private static final Color EDGE = new Color(0xAAAAAA), CHECK_LINE = new Color(0x404040);
     /** チェックボックス・オプションボタンの箱の大きさ、枠の左から箱・文字までの距離 (pt)。 */
     static final double CHECK_BOX = 9.5, CHECK_LEFT = 3.5, CHECK_TEXT = 16.25;
-    /** ラベルの文字の上の余白、グループの見出しと枠の上の線を上げる量 (pt。exp76)。 */
+    /** ラベルの文字の上の余白、グループの見出しと枠の上の線を上げる量 (pt)。 */
     static final double LABEL_TOP = 3, GBOX_UP = 2.5, GBOX_LINE_UP = 3;
     private static final Color BUTTON = new Color(0xF0F0F0), TRACK = new Color(0xCCCCCC), THUMB = new Color(0x777777);
     /** ドロップダウン・リストボックスの文字の大きさ (pt)、左の余白 (pt)、リストの行の間隔 (文字の大きさの倍)。 */
@@ -156,7 +156,7 @@ final class VmlControls {
             switch (type) {
                 case "Note" -> {
                     // コメント: 薄い黄色の背景、黒い枠、左上から折り返した文字
-                    // セルの右上の角への矢印 (Excel の印刷 exp87: 0.14pt の線と、長さ 6pt ほどの矢じり)
+                    // セルの右上の角への矢印 (0.14pt の線と、長さ 6pt ほどの矢じり)
                     if (noteRow >= 0 && noteCol >= 0) {
                         double ax = L.x(noteCol + 1), ay = L.y(noteRow);
                         double dx = ax - x0, dy = ay - y0, len = Math.hypot(dx, dy);
@@ -175,7 +175,7 @@ final class VmlControls {
                     cv.stroke(new Rectangle2D.Double(x0, y0, w, h), new PdfCanvas.Stroke(0.75f), Color.BLACK);
                     if (sp == null || text.isEmpty()) return;
                     float fs = noteSize;
-                    // Excel の印刷 (exp87): 文字は枠の左から 1.11pt、1 行目の基線は枠の上 + アセント、行の間隔は大きさ × 1.133。
+                    // Excel の印刷: 文字は枠の左から 1.11pt、1 行目の基線は枠の上 + アセント、行の間隔は大きさ × 1.133。
                     // 英文は単語の切れ目で折り返す
                     double padX = NOTE_PAD_X * fs / 9, pitch = fs * NOTE_PITCH;
                     TextLayout.Run run = new TextLayout.Run(text, sp, fs, Color.BLACK);
@@ -201,7 +201,7 @@ final class VmlControls {
                 }
                 case "Checkbox", "Radio" -> {
                     // 箱の大きさ 9pt
-                    // Excel の印刷 exp76: 箱は枠の左から 3.5pt、大きさ 9.5pt、線は濃い灰色 0.6pt。文字は枠の左から 16.25pt
+                    // Excel の印刷: 箱は枠の左から 3.5pt、大きさ 9.5pt、線は濃い灰色 0.6pt。文字は枠の左から 16.25pt
                     double box = CHECK_BOX;
                     double bx = x0 + CHECK_LEFT, by = y0 + (h - box) / 2;
                     PdfCanvas.Stroke st = new PdfCanvas.Stroke(0.6f);
@@ -209,7 +209,7 @@ final class VmlControls {
                         cv.fillRect(bx, by, box, box, Color.WHITE);
                         cv.stroke(new Rectangle2D.Double(bx, by, box, box), st, CHECK_LINE);
                         if (checked && checkState == 2) {
-                            // 混在: 箱の中を灰色で塗る (Excel の印刷 exp76)
+                            // 混在: 箱の中を灰色で塗る
                             cv.fillRect(bx + 1.5, by + 1.5, box - 3, box - 3, new Color(0x808080));
                         } else if (checked) {
                             Path2D p = new Path2D.Double();
@@ -243,7 +243,7 @@ final class VmlControls {
                 }
                 case "GBox" -> {
                     PdfCanvas.Stroke st = new PdfCanvas.Stroke(1f);
-                    // 見出しの中ほどを枠の上の線にする (Excel の印刷 exp76: 見出しは枠の上から 2.5pt 上へ、左から 9.2pt)
+                    // 見出しの中ほどを枠の上の線にする (見出しは枠の上から 2.5pt 上へ、左から 9.2pt)
                     double ty = y0 + size * 0.6 - GBOX_UP - GBOX_LINE_UP;
                     cv.stroke(new Rectangle2D.Double(x0, ty, w, h - (ty - y0) - 1), st, stroke != null ? stroke : new Color(0x808080));
                     if (!text.isEmpty() && sp != null) {
@@ -315,7 +315,7 @@ final class VmlControls {
                     double f = max == min ? 0 : Math.max(0, Math.min(1, (double) (val - min) / (max - min)));
                     if (horiz) {
                         cv.fillRect(x0 + bt, y0, w - 2 * bt, h, TRACK);
-                        // 溝の上下の縁 (Excel の印刷 exp53: #AAAAAA 0.5pt)
+                        // 溝の上下の縁 (#AAAAAA 0.5pt)
                         cv.line(x0 + bt, y0 + 0.25, x1 - bt, y0 + 0.25, new PdfCanvas.Stroke(0.5f), EDGE);
                         cv.line(x0 + bt, y1 - 0.25, x1 - bt, y1 - 0.25, new PdfCanvas.Stroke(0.5f), EDGE);
                         double px = x0 + bt + f * (w - 2 * bt);
@@ -434,7 +434,7 @@ final class VmlControls {
                 root = HeaderImages.parseVml(in.readAllBytes());
             }
             FontManager.Spec font = ctx.fonts.spec(ctx.japanese ? "ＭＳ Ｐゴシック" : "Tahoma", false, false);
-            // ドロップダウン・リストボックスの項目は Windows の UI の書体 (英字 Tahoma、かな・漢字 MS UI Gothic。Excel の印刷 exp53)
+            // ドロップダウン・リストボックスの項目は Windows の UI の書体 (英字 Tahoma、かな・漢字 MS UI Gothic)
             FontManager.Spec listFont = ctx.japanese ? ctx.fonts.spec("Meiryo UI", "Meiryo UI", false, false) : font;
             boolean asDisplayed = sheet.getCTWorksheet().isSetPageSetup() && sheet.getCTWorksheet().getPageSetup().isSetCellComments()
                     && sheet.getCTWorksheet().getPageSetup().getCellComments() == org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellComments.AS_DISPLAYED;
@@ -530,7 +530,7 @@ final class VmlControls {
                         c.textColor = fontColor(fe.getAttribute("color"));
                     }
                 }
-                // 塗りと線 (filled・stroked が f でなく、色の指定があるとき。Excel の印刷 exp76)
+                // 塗りと線 (filled・stroked が f でなく、色の指定があるとき)
                 if (type.equals("Checkbox") || type.equals("Radio") || type.equals("Label")) {
                     if (!isFalse(s.getAttribute("filled")) && !s.getAttribute("fillcolor").isEmpty()) c.fill = vmlColor(s.getAttribute("fillcolor"));
                     if (!isFalse(s.getAttribute("stroked")) && !s.getAttribute("strokecolor").isEmpty() && !type.equals("Label"))
@@ -551,7 +551,7 @@ final class VmlControls {
                             if (rs.numFormattingRuns() > 0 && rs.getFontOfFormattingRun(0) != null) {
                                 var nf = rs.getFontOfFormattingRun(0);
                                 c.noteSize = nf.getFontHeightInPoints();
-                                // コメントの既定の書体名「MS P ゴシック」(半角) は Excel では ＭＳ ゴシック で描かれる (exp87)
+                                // コメントの既定の書体名「MS P ゴシック」(半角) は Excel では ＭＳ ゴシック で描かれる
                                 String fn = nf.getFontName() == null ? "" : nf.getFontName();
                                 if (fn.startsWith("MS P ") || fn.startsWith("MS ")) fn = "ＭＳ ゴシック";
                                 if (!fn.isEmpty()) c.fontSpec = ctx.fonts.spec(fn, nf.getBold(), nf.getItalic());

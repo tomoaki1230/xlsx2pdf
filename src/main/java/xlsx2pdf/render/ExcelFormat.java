@@ -101,7 +101,7 @@ public final class ExcelFormat {
                         sec.condVal = Double.parseDouble(m.group(2));
                     }
                 } else if (low.startsWith("dbnum")) {
-                    // 漢数字 (1: 一二三・十百千、2: 壱弐参・拾百阡、3: 全角数字)。数字の並びを書き換える (exp118)
+                    // 漢数字 (1: 一二三・十百千、2: 壱弐参・拾百阡、3: 全角数字)。数字の並びを書き換える
                     try { sec.dbnum = Integer.parseInt(low.substring(5).trim()); } catch (NumberFormatException ignored) { sec.dbnum = 0; }
                 } else if (low.startsWith("natnum")) {
                     // ほかの数字の書式には対応しない: 数字のまま
@@ -200,7 +200,7 @@ public final class ExcelFormat {
 
     /**
      * [DBNum] の数字の書き方に書き換える: 数字の並びごとに、1・2 は位取りの漢数字 (小数点の後は 1 字ずつ)、3 は全角の数字。
-     * Excel の印刷 (exp118): 0 の [DBNum3] で −13 → 「-１３」、[DBNum1] の和暦で「明治三十三年一月〇日」。
+     * Excel の印刷: 0 の [DBNum3] で −13 → 「-１３」、[DBNum1] の和暦で「明治三十三年一月〇日」。
      */
     static String dbnum(String t, int kind) {
         StringBuilder o = new StringBuilder();
@@ -299,7 +299,7 @@ public final class ExcelFormat {
 
     /** "_x" の空白 (文字 x の幅)。括弧・マイナス・ピリオド・カンマは細い空白 (U+2009)、それ以外は半角空白。 */
     static String pad(char c) {
-        // 「_x」: x の文字の幅の空白。描かない私用の文字 (U+E000 + x) で表し、幅は書体の x の幅 (Excel の印刷 exp96 のメイリオ)
+        // 「_x」: x の文字の幅の空白。描かない私用の文字 (U+E000 + x) で表し、幅は書体の x の幅
         if (c != ' ' && c < 0x100) return String.valueOf((char) (FontManager.PAD_BASE + c));
         return switch (c) {
             case ')', '(', '-', '.', ',' -> "\u2009";
@@ -830,7 +830,7 @@ public final class ExcelFormat {
             if (sb.length() == 0) sb.append('0');
             // 分数の部分がなくなっても、その幅の空白を残す (Excel は桁を揃える)
             String t = sb.toString().trim();
-            // 分母を決めた形 (# ?/4) も同じ (Excel の印刷 exp47: 3 は「3」の後に「 ?/4」の幅の空白)
+            // 分母を決めた形 (# ?/4) も同じ (3 は「3」の後に「 ?/4」の幅の空白)
             boolean fixedDen = den.matches("\\d+");
             return numW > 0 && (denW > 0 || fixedDen) ? t + " " + FIG.repeat(numW + 1 + (fixedDen ? den.length() : Math.max(denW, den.length()))) : t;
         }

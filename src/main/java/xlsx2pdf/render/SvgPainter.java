@@ -22,7 +22,7 @@ import org.w3c.dom.Node;
 
 /**
  * SVG の画像 (asvg:svgBlip) をベクターのまま描く。Excel と同じく、viewBox (なければ 0 0 width height) を画像の枠に
- * 縦横別々に合わせる (preserveAspectRatio は使わない。exp62 svg_aspect)。
+ * 縦横別々に合わせる (preserveAspectRatio は使わない)。
  * <p>
  * 対応: svg・g・defs・symbol・use・path (全命令)・rect (角の丸め)・circle・ellipse・line・polyline・polygon・text・tspan、
  * transform、表現属性と style 属性と &lt;style&gt; の CSS (要素名・.class・#id とその組み合わせ。子孫の結合子は使わない)、
@@ -730,13 +730,6 @@ final class SvgPainter {
 
         private void skip() {
             while (i < s.length() && (Character.isWhitespace(s.charAt(i)) || s.charAt(i) == ',')) i++;
-        }
-
-        private boolean numberNext() {
-            skip();
-            if (i >= s.length()) return false;
-            char c = s.charAt(i);
-            return c == '-' || c == '+' || c == '.' || Character.isDigit(c);
         }
 
         private double n() {

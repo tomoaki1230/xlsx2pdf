@@ -158,7 +158,7 @@ public final class ValueFormatter {
             }
             case NUMERIC -> {
                 double v = cell.getNumericCellValue();
-                // 表示形式「@」の数値は文字列と同じ扱い (標準の配置で左寄せ。exp124 fmt_at_num)
+                // 表示形式「@」の数値は文字列と同じ扱い (標準の配置で左寄せ)
                 r.number = fmt == null || !fmt.trim().equals("@");
                 r.value = v;
                 if (v == 0 && !showZeros) { r.text = ""; return r; }
@@ -217,7 +217,7 @@ public final class ValueFormatter {
 
     /** 数値を書式化して結果に設定する。 */
     private void formatNumber(Result r, double v, String fmt) {
-        // 文字列の表示形式「@」の数値 (形式を後から付けたセル) は、Excel は標準の形で表示する (exp124 fmt_at_num)
+        // 文字列の表示形式「@」の数値 (形式を後から付けたセル) は、Excel は標準の形で表示する
         if (fmt == null || fmt.isEmpty() || fmt.trim().equals("@") || ExcelFormat.isGeneral(fmt) && sections(fmt).size() == 1
                 && fmt.trim().equalsIgnoreCase("General")) {
             r.general = true;
@@ -336,7 +336,7 @@ public final class ValueFormatter {
     }
 
     /**
-     * 狭い列の「標準」: maxChars 文字 (どの文字も数字 1 文字分の幅で数える) に収まる形 (exp105)。
+     * 狭い列の「標準」: maxChars 文字 (どの文字も数字 1 文字分の幅で数える) に収まる形。
      * 小数で書くと、1 未満の数の最初の有効数字の位置が変わるもの (0.000988 → 0.001) と、有効数字が指数表示より少ないものは指数表示にする。
      * どちらも収まらなければ丸めた小数 (0、-0)。それも収まらなければ null (# で埋める)。
      */

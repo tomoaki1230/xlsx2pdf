@@ -15,7 +15,7 @@ import org.w3c.dom.Element;
 /**
  * タイムライン (tsle:timeslicer) を描く: 枠、見出しと下線、選んだ期間の文字、単位 (年・四半期・月・日)、
  * 年の文字、区画の番号、区画の棒 (選んだ期間は青のグラデーション、ほかは灰色)、下のスクロールの線。
- * 寸法と色は Excel の印刷の実測 (exp58)。
+ * 寸法と色は Excel の印刷の実測。
  */
 final class TimelinePainter {
     private static final String REL_TIMELINE = "http://schemas.microsoft.com/office/2011/relationships/timeline";

@@ -75,7 +75,7 @@ public final class HeaderFooter {
         else if (even) { head = hf.getEvenHeader(); foot = hf.getEvenFooter(); suffix = "EVEN"; }
         else { head = hf.getOddHeader(); foot = hf.getOddFooter(); suffix = ""; }
         double fs = scaleWithDoc ? scale : 1;
-        // 余白に合わせないときは用紙の端から 0.75in (exp121 noalign)
+        // 余白に合わせないときは用紙の端から 0.75in
         double lx = alignWithMargins ? ps.left : 0.75 * 72;
         double rx = pageW - (alignWithMargins ? ps.right : 0.75 * 72);
         if (head != null && !head.isEmpty())
@@ -110,7 +110,7 @@ public final class HeaderFooter {
             HeaderImages.Img img = null;
             if (!s.pics.isEmpty()) img = images.get(s.pos + kind + suffix);
             if (img == null && !s.pics.isEmpty()) img = images.get(s.pos + kind);
-            // 画像の大きさはセルの列幅・行高と同じく「プリンタ / 画面」の比で印刷する (横は数字幅、縦は標準行の比。exp122 img_basic:
+            // 画像の大きさはセルの列幅・行高と同じく「プリンタ / 画面」の比で印刷する (横は数字幅、縦は標準行の比。
             // ＭＳ Ｐゴシック 11 で 150 × 75pt → 138 × 68.04pt)
             double imgH = img != null ? img.h() * fs * imgKy : 0, imgW = img != null ? img.w() * fs * imgKx : 0;
             // 行ごとに: 文字だけ・画像だけ (&G だけの行)・文字と画像 (&G を文字の間に置いた行) に分ける
@@ -130,7 +130,7 @@ public final class HeaderFooter {
                     continue;
                 }
                 if (mark >= 0 && img != null) {
-                    // 文字と画像: 画像を行の中に置く (exp122 img_text「前の文字 &G 後の文字」)
+                    // 文字と画像: 画像を行の中に置く
                     List<TextLayout.Run> left = new ArrayList<>(), right = new ArrayList<>();
                     for (int k = 0; k < lr0.size(); k++) {
                         TextLayout.Run r = lr0.get(k);
@@ -138,27 +138,26 @@ public final class HeaderFooter {
                         (k < mark ? left : right).add(r);
                     }
                     TextLayout.Line ll = lineOf(left, fs), rl = lineOf(trimTrailingSpaces(right), fs);
-                    double pb = HF_PITCH > 0 ? printerPitch(lr, fs) : 0;
+                    double pb = printerPitch(lr, fs);
                     if (pb <= 0) pb = lineBox(ll.ascent >= rl.ascent ? ll : rl);
                     Row row = new Row(ll, rl, pb, true);
                     rows.add(row);
                     continue;
                 }
-                // 収まる行は折り返さずに置く。行末の全角の空白は幅に数え (n0996 の「事業所名：」+ 全角の空白)、半角の空白は落とす (exp121 spaces)
+                // 収まる行は折り返さずに置く。行末の全角の空白は幅に数え (」+ 全角の空白)、半角の空白は落とす
                 lr = trimTrailingSpaces(lr);
                 List<TextLayout.Line> ls = TextLayout.layout(lr, 0, false, false, ctx.fonts);
-                if (HF_WRAP && !ls.isEmpty() && ls.get(0).width > rx - lx + 0.01) {
+                if (!ls.isEmpty() && ls.get(0).width > rx - lx + 0.01) {
                     List<TextLayout.Line> w = TextLayout.layout(lr, (float) (rx - lx), true, false, ctx.fonts);
                     if (!w.isEmpty()) ls = w;
                 }
-                double pb = HF_PITCH > 0 ? printerPitch(lr, fs) : 0;
+                double pb = printerPitch(lr, fs);
                 for (TextLayout.Line l : ls) {
                     fillEmpty(l, fs);
                     rows.add(new Row(l, null, pb > 0 ? pb : lineBox(l), false));
-                    if (!HF_WRAP) break;
                 }
             }
-            if (img != null && !anyText) rows.removeIf(r -> !r.image());   // 画像だけの部分は文字の行を数えない (exp122 img_basic)
+            if (img != null && !anyText) rows.removeIf(r -> !r.image());   // 画像だけの部分は文字の行を数えない
             if (img != null && rows.stream().noneMatch(Row::image)) rows.add(0, new Row(null, null, 0, true));   // &G のない画像は先頭に
             // 行の高さ: 画像だけの行は画像の高さ (後ろに文字の行が続くときは 1.17pt 空ける)、文字と画像の行は画像の高さ + 文字の行の下の部分
             List<Double> adv = new ArrayList<>();
@@ -173,12 +172,12 @@ public final class HeaderFooter {
             }
             double blockH = total0;
             // 1 行だけの部分は枠の内側 8 画素 (600 dpi) に置く
-            // 書式が途中で変わる行 (ランが 2 つ以上) は内側にずらさない (実ファイルの 77 行、exp121 supsub、exp102 codes の右)
+            // 書式が途中で変わる行 (ランが 2 つ以上) は内側にずらさない
             boolean textOnly = img == null && rows.size() == 1 && !rows.get(0).image();
             boolean oneRun = textOnly && runCount(rows.get(0).line()) <= 1;
-            boolean single = textOnly && (HF_ONE_RUN < 2 || oneRun);
+            boolean single = textOnly && oneRun;
             double inset = (HF_INSET & 1) != 0 && single ? HF_INSET_PT : 0;
-            boolean sideOk = textOnly && (HF_ONE_RUN < 1 || oneRun);
+            boolean sideOk = textOnly && oneRun;
             double side = sideOk && (s.pos == 'L' && (HF_INSET & 2) != 0 || s.pos == 'R' && (HF_INSET & 4) != 0) ? HF_INSET_PT : 0;
             double y = header ? margin + inset : pageH - margin - inset - blockH;
             for (int k = 0; k < rows.size(); k++) {
@@ -219,9 +218,9 @@ public final class HeaderFooter {
 
     /** 画像の位置を表す印のラン (fontName)。 */
     static final String IMG_MARK = "\u0001&G";
-    /** 画像だけの行の後に文字の行が続くときの間 (pt。exp122 img_text のフッター)。 */
+    /** 画像だけの行の後に文字の行が続くときの間 (pt)。 */
     static final double IMG_GAP = 1.17;
-    /** 文字と画像の行で、画像の下端を基線より下げる量 (pt。exp122 img_text のヘッダー)。 */
+    /** 文字と画像の行で、画像の下端を基線より下げる量 (pt)。 */
     static final double IMG_INLINE_DROP = 1.32;
 
     /** 折り返さない 1 行 (空なら既定の書体の高さ)。 */
@@ -242,18 +241,13 @@ public final class HeaderFooter {
         }
     }
 
-    /** 行送りをプリンタの標準行にする (exp15)。 */
-    static final int HF_PITCH = 1;
     /** 内側の余白: 1 = 1 行の部分を縦に、2 = 左の部分を横に、4 = 右の部分を横に (右は長い文字で合わないので使わない)。 */
     static final int HF_INSET = 7;
     static final double HF_INSET_PT = 0.96;
-    static final boolean HF_TRIM = true;
-    static final boolean HF_SEPARATE = true;
-    static final boolean HF_WRAP = true;
     static final double HF_BASE = 0;
 
     /**
-     * 行送り (pt): Excel はその行の文字の書体・大きさのプリンタの標準行 (600 dpi、printrows.tsv) の最大で行を送る (exp15)。
+     * 行送り (pt): Excel はその行の文字の書体・大きさのプリンタの標準行 (600 dpi、printrows.tsv) の最大で行を送る。
      * ドキュメントに合わせて拡大縮小するときは倍率を掛ける。求められなければ 0。
      */
     private double printerPitch(List<TextLayout.Run> runs, double fs) {
@@ -263,7 +257,7 @@ public final class HeaderFooter {
         for (TextLayout.Run r : rs) {
             if (r.fontName == null || r.ptSize <= 0) return 0;
             String n = FontManager.norm(r.fontName);
-            // ＭＳ 系はどの大きさでも p + 10 (printrows.tsv の 6〜28pt がすべてこの形。72pt も Excel のフッターの位置と合う。exp121 sizes)
+            // ＭＳ 系はどの大きさでも p + 10 (printrows.tsv の 6〜28pt がすべてこの形。72pt も Excel のフッターの位置と合う)
             int px = n.startsWith("ms ") ? (int) Math.round(r.ptSize * 600 / 72.0) + 10 : ctx.printer.autoRowDev(r.fontName, r.ptSize, 1.0, 600);
             if (px <= 0) return 0;
             best = Math.max(best, px);
@@ -272,11 +266,10 @@ public final class HeaderFooter {
     }
 
     /**
-     * 上付きの文字の上端が行の文字の上端より上に出るとき、Excel は行をその分 (から 0.43pt 引いた量) 下げる (exp121 supsub:
-     * 11pt で 1.59pt、14pt で 2.25pt)。
+     * 上付きの文字の上端が行の文字の上端より上に出るとき、Excel は行をその分 (から 0.43pt 引いた量) 下げる
+     * (11pt で 1.59pt、14pt で 2.25pt)。
      */
     private static double supExtra(TextLayout.Line l) {
-        if (!HF_CELLSHIFT) return 0;
         double top = 0;
         for (TextLayout.Run r : l.runs) {
             if (r.baselineShift <= 0 || r.text.isEmpty()) continue;
@@ -285,7 +278,6 @@ public final class HeaderFooter {
         return Math.max(0, top - l.ascent - SUP_EXTRA_PAD);
     }
 
-    static final boolean HF_CELLSHIFT = true;
     static final double SUP_EXTRA_PAD = 0.43;
 
     /** 行末の半角の空白を落としたランの並び (元のランは変えない)。 */
@@ -315,10 +307,10 @@ public final class HeaderFooter {
         return false;
     }
 
-    /** 書体か大きさを指定した行の基線を下げる量 (pt)。実ファイル 376 件の帯の比較で、指定のある行だけ本ツールが約 0.2〜0.3pt 高い (exp15 は一様に約 0.3)。 */
+    /** 書体か大きさを指定した行の基線を下げる量 (pt。Excel は指定のある行だけ約 0.2〜0.3pt 低く描く)。 */
     static final double HF_CODE_DROP = 0.25;
 
-    /** 書式の違うランの数 (&amp;P・&amp;D などの項目で区切られただけの同じ書式のランは 1 つと数える。n0509「出力日：&amp;D」)。 */
+    /** 書式の違うランの数 (&amp。P・&amp。D などの項目で区切られただけの同じ書式のランは 1 つと数える。&amp。D」)。 */
     private static int runCount(TextLayout.Line l) {
         int n = 0;
         TextLayout.Run prev = null;
@@ -334,9 +326,6 @@ public final class HeaderFooter {
         return a.spec == b.spec && a.size == b.size && java.util.Objects.equals(a.color, b.color) && a.underline == b.underline
                 && a.strike == b.strike && a.baselineShift == b.baselineShift;
     }
-
-    /** 内側の余白 (縦・横) は、書式が途中で変わらない 1 行の部分だけ (実ファイル 376 件の帯の比較で位置の合う行 2735 → 3424、exp102 codes)。 */
-    static final int HF_ONE_RUN = 2;
 
     /** 行送り (pt)。 */
     static double lineBox(TextLayout.Line l) {
@@ -368,7 +357,7 @@ public final class HeaderFooter {
         while (i <= text.length()) {
             char ch = i < text.length() ? text.charAt(i) : '\0';
             boolean end = i >= text.length();
-            // 末尾の単独の & は Excel は描かない (exp121 amp)
+            // 末尾の単独の & は Excel は描かない
             if (!end && ch == '&' && i + 1 >= text.length()) { i++; continue; }
             boolean code = !end && ch == '&' && i + 1 < text.length();
             boolean newline = !end && ch == '\n';
@@ -447,11 +436,11 @@ public final class HeaderFooter {
                         String spec = text.substring(i, j);
                         i = Math.min(text.length(), j + 1);
                         String[] parts = spec.split(",", 2);
-                        // 「-」は書体名を指定しない形で、Excel はテーマの本文の書体で描く (exp102: 標準が Arial・メイリオ・ＭＳ Ｐ明朝でも游ゴシック)
+                        // 「-」は書体名を指定しない形で、Excel はテーマの本文の書体で描く (標準が Arial・メイリオ・ＭＳ Ｐ明朝でも游ゴシック)
                         if (!parts[0].equals("-")) { fontName = parts[0]; eaName = null; }
                         else {
                             if (ctx.theme.minorLatin != null && !ctx.theme.minorLatin.isEmpty()) fontName = ctx.theme.minorLatin;
-                            // 和文はテーマの和文の書体 (exp121 fontstyle: Aptos Narrow のテーマで和文は游ゴシック)
+                            // 和文はテーマの和文の書体 (Aptos Narrow のテーマで和文は游ゴシック)
                             String ea = !ctx.theme.minorEa.isEmpty() ? ctx.theme.minorEa : ctx.theme.minorJpan;
                             eaName = ea != null && !ea.isEmpty() ? ea : null;
                         }
@@ -473,7 +462,7 @@ public final class HeaderFooter {
                 st = new Style(fontName, eaName, size, bold, italic, strike, underline, shift, color);
                 continue;
             }
-            if (ch != '\t' && ch != '\r') buf.append(ch);   // タブは幅 0 (exp122 tabs)。CR は改行 (LF) の前のものなので捨てる
+            if (ch != '\t' && ch != '\r') buf.append(ch);   // タブは幅 0。CR は改行 (LF) の前のものなので捨てる
             i++;
         }
         flush(out, pos, lines, pics);
@@ -481,41 +470,31 @@ public final class HeaderFooter {
     }
 
     /**
-     * 解析したセクションを追加する (空なら追加しない)。末尾の空行は数えない (exp121 blanklines)。
-     * 同じ位置のセクションが繰り返されたときは、Excel はつながずに別々に同じ位置へ重ねて描く (exp121 order)。
+     * 解析したセクションを追加する (空なら追加しない)。末尾の空行は数えない。
+     * 同じ位置のセクションが繰り返されたときは、Excel はつながずに別々に同じ位置へ重ねて描く。
      */
     private static void flush(List<Section> out, char pos, List<List<TextLayout.Run>> lines, List<String> pics) {
         boolean any = !pics.isEmpty();
         for (List<TextLayout.Run> l : lines) if (!l.isEmpty()) any = true;
         if (!any) return;
-        while (HF_TRIM && lines.size() > 1 && lines.get(lines.size() - 1).isEmpty()) lines.remove(lines.size() - 1);
-        if (HF_SEPARATE) { out.add(new Section(pos, lines, pics)); return; }
-        // 同じ位置の既存セクションにつなぐ
-        for (Section s : out) {
-            if (s.pos == pos) {
-                s.lines.get(s.lines.size() - 1).addAll(lines.get(0));
-                for (int k = 1; k < lines.size(); k++) s.lines.add(lines.get(k));
-                s.pics.addAll(pics);
-                return;
-            }
-        }
+        while (lines.size() > 1 && lines.get(lines.size() - 1).isEmpty()) lines.remove(lines.size() - 1);
         out.add(new Section(pos, lines, pics));
     }
 
     /** 書式を適用したランを作る。 */
     private TextLayout.Run mkRun(String text, Style st, double fs) {
-        // 和文の書体でないフォントの和文は、セル (ＭＳ ゴシック) と違い ＭＳ Ｐゴシックで描く (exp102: Arial のヘッダー・フッター。テーマの書体によらない)
+        // 和文の書体でないフォントの和文は、セル (ＭＳ ゴシック) と違い ＭＳ Ｐゴシックで描く (Arial のヘッダー・フッター。テーマの書体によらない)
         FontManager.Spec sp = FontManager.substitute(st.font()).startsWith("ipa") ? ctx.fonts.spec(st.font(), st.bold(), st.italic())
                 : ctx.fonts.spec(st.font(), st.ea() != null ? st.ea() : HF_EA, st.bold(), st.italic());
         TextLayout.Run r = new TextLayout.Run(text, sp, (float) (st.size() * fs), st.color());
-        // 行送りを決める書体: テーマの和文の書体で描く和文があれば、その書体 (exp121 fontstyle の「-,Bold」)
+        // 行送りを決める書体: テーマの和文の書体で描く和文があれば、その書体
         r.fontName = st.ea() != null && text.chars().anyMatch(ch -> ch >= 0x3000) ? st.ea() : st.font();
         r.ptSize = st.size();
         r.strike = st.strike();
         r.underline = st.underline();
         r.baselineShift = st.shift();
-        // 上付き・下付きの大きさとずらし量はセルと同じ (66% を整数に丸め、上 0.497 倍・下 0.198 倍。exp121 supsub)
-        r.cellShift = HF_CELLSHIFT;
+        // 上付き・下付きの大きさとずらし量はセルと同じ (66% を整数に丸め、上 0.497 倍・下 0.198 倍)
+        r.cellShift = true;
         return r;
     }
 }

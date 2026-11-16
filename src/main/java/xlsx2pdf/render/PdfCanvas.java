@@ -30,8 +30,6 @@ public final class PdfCanvas implements AutoCloseable {
     private final PDPageContentStream cs;
     /** 透明度の組み合わせ (塗り × 1000 + 線) ごとのグラフィックス状態。 */
     private final Map<Integer, PDExtendedGraphicsState> alphaStates = new HashMap<>();
-    /** ブック全体で共有する画像のキャッシュ。 */
-    private final Map<Object, PDImageXObject> imageCache;
 
     /** 線のスタイル。 */
     public static final class Stroke {
@@ -56,13 +54,10 @@ public final class PdfCanvas implements AutoCloseable {
 
     /**
      * ページに描くキャンバスを作る (座標系を左上原点に変換する)。
-     *
-     * @param imageCache ブック全体で共有する画像のキャッシュ
      */
-    public PdfCanvas(PDDocument doc, PDPage page, FontManager fonts, Map<Object, PDImageXObject> imageCache) throws IOException {
+    public PdfCanvas(PDDocument doc, PDPage page, FontManager fonts) throws IOException {
         this.doc = doc;
         this.fonts = fonts;
-        this.imageCache = imageCache;
         this.page = page;
         if (page.getResources() == null) page.setResources(new org.apache.pdfbox.pdmodel.PDResources());
         this.cs = new PDPageContentStream(doc, page);
@@ -70,12 +65,6 @@ public final class PdfCanvas implements AutoCloseable {
         this.pageH = h;
         cs.transform(new Matrix(1, 0, 0, -1, 0, h));
     }
-
-    /** キャッシュした画像を返す (なければ null)。 */
-    public PDImageXObject cachedImage(Object key) { return imageCache.get(key); }
-
-    /** 画像をキャッシュする。 */
-    public void cacheImage(Object key, PDImageXObject img) { imageCache.put(key, img); }
 
     /** グラフィックス状態を保存する。 */
     public void save() throws IOException { cs.saveGraphicsState(); }

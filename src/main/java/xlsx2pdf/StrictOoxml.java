@@ -12,7 +12,7 @@ import java.util.zip.ZipOutputStream;
 /**
  * Strict OOXML (ISO/IEC 29500 Strict。Excel の「Strict Open XML スプレッドシート」) のブックを、POI が読める通常 (Transitional) の形に直す。
  * 違いは名前空間とリレーションの種類の URI (http://purl.oclc.org/ooxml/... → http://schemas.openxmlformats.org/.../2006/...) なので、
- * zip の中の XML をメモリ上で書き換える。夜間 n3415・n5623。
+ * zip の中の XML をメモリ上で書き換える。
  */
 final class StrictOoxml {
     private StrictOoxml() {}

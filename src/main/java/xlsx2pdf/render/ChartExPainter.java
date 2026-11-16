@@ -77,7 +77,6 @@ final class ChartExPainter {
         Data d = data.get(Xml.attr(Xml.child(s0, "dataId"), "val", "0"));
         if (d == null) { cv.restore(); return; }
         Element legend = Xml.child(chart, "legend");
-        List<String[]> legendItems = new ArrayList<>();
         Rectangle2D box = new Rectangle2D.Double(inner.getX(), top, inner.getWidth(), inner.getMaxY() - top);
         try {
             switch (layout) {
@@ -188,8 +187,8 @@ final class ChartExPainter {
     }
 
     /**
-     * 項目ラベルの行の場所 (pt)。和文を含めば行の高さ + 6、欧文だけなら欧文の書体の行 + 5 (Excel の印刷 exp72:
-     * 9pt の欧文の項目で 16.6pt)。
+     * 項目ラベルの行の場所 (pt)。和文を含めば行の高さ + 6、欧文だけなら欧文の書体の行 + 5
+     * (9pt の欧文の項目で 16.6pt)。
      */
     private double catSpace(Data d) {
         for (List<String> l : d.levels) for (String x : l) if (x != null && x.codePoints().anyMatch(FontManager::isCjk)) return lineH(SIZE) + 6;
@@ -232,7 +231,7 @@ final class ChartExPainter {
         double total = 0;
         for (Object[] it : items) total += 7 + 3 + width((String) it[0], SIZE) + 10;
         total -= 10;
-        // Excel の印刷 exp72 (ウォーターフォール): 印は 7pt の四角、行の中心は題名の下 + 5.5pt、プロットは凡例の行の下 + 16.5pt
+        // ウォーターフォールの凡例: 印は 7pt の四角、行の中心は題名の下 + 5.5pt、プロットは凡例の行の下 + 16.5pt
         double x = box.getCenterX() - total / 2, y = box.getY() + LEGEND_DROP;
         double lh = lineH(SIZE);
         for (Object[] it : items) {
@@ -254,13 +253,13 @@ final class ChartExPainter {
     /** 値の軸 (縦) と目盛線を描き、プロットの矩形を返す。lo/hi/unit は ChartPainter.Axis に入れる。 */
     private Rectangle2D valueAxis(PdfCanvas cv, Rectangle2D box, ChartPainter.Axis ax, double dmin, double dmax, double bottomSpace,
                                   boolean percentRight, ChartPainter.Axis ax2) throws IOException {
-        ax.maxIntervals = 10; // Excel 2016 以降のグラフは目盛りの区間を 10 まで (exp90 のパレート図: 0〜55 の 5 刻みでなく 0〜60 の 10 刻み)
+        ax.maxIntervals = 10; // Excel 2016 以降のグラフは目盛りの区間を 10 まで (0〜55 の 5 刻みでなく 0〜60 の 10 刻み)
         ChartPainter.autoScale(ax, dmin, dmax, box.getHeight() - bottomSpace, lineH(SIZE));
         double lw = 0;
         for (double v = ax.lo; v <= ax.hi + ax.unit * 1e-6; v += ax.unit) lw = Math.max(lw, width(fmt(v), SIZE));
         double rw = percentRight ? width("100%", SIZE) + 6 : 0;
-        // プロットの左右の余白: 右に % の軸がないものは左 4.1pt・右 -0.3pt (Excel の印刷 exp49・72)
-        // パレート図 (右に % の軸): 左 9.8pt・右 4pt・上 5pt (Excel の印刷 exp49・72)
+        // プロットの左右の余白: 右に % の軸がないものは左 4.1pt・右 -0.3pt
+        // パレート図 (右に % の軸): 左 9.8pt・右 4pt・上 5pt
         double pl = percentRight ? 9.8 : PLOT_LEFT, pr = percentRight ? 4 : PLOT_RIGHT;
         double pt = percentRight ? 5 : 4;
         Rectangle2D plot = new Rectangle2D.Double(box.getX() + lw + pl, box.getY() + pt, box.getWidth() - lw - pl - pr - rw, box.getHeight() - bottomSpace - pt);
@@ -318,7 +317,7 @@ final class ChartExPainter {
         double gap = catGap(s, 0.5);
         double slot = plot.getWidth() / Math.max(1, n), bw = slot / (1 + gap);
         boolean labels = Xml.child(s, "dataLabels") != null;
-        // 棒をつなぐ線 (累計の高さ、棒の右端から次の棒の左端。#D9D9D9 の 0.75pt。Excel の印刷 exp72)
+        // 棒をつなぐ線 (累計の高さ、棒の右端から次の棒の左端。#D9D9D9 の 0.75pt)
         Element vis = Xml.child(Xml.child(s, "layoutPr"), "visibility");
         if (vis == null || Xml.boolAttr(vis, "connectorLines", true)) {
             for (int i = 0; i + 1 < n; i++) {
@@ -349,7 +348,7 @@ final class ChartExPainter {
         List<String> cats = cats(d, n);
         double lw = 0;
         for (String c : cats) lw = Math.max(lw, width(c, SIZE));
-        // 項目名とプロットの間 4.2pt、上 0.5pt、下 0.1pt (Excel の印刷 exp49)
+        // 項目名とプロットの間 4.2pt、上 0.5pt、下 0.1pt
         Rectangle2D plot = new Rectangle2D.Double(box.getX() + lw + 4.16, box.getY() + 0.5, box.getWidth() - lw - 3.96, box.getHeight() - 0.6);
         double slot = plot.getHeight() / n, bh = slot / 1.06;
         for (int i = 0; i < n; i++) {
@@ -385,7 +384,7 @@ final class ChartExPainter {
             for (double x : v) sd += (x - mean) * (x - mean);
             sd = v.size() > 1 ? Math.sqrt(sd / (v.size() - 1)) : 1;
             double w = Xml.child(binning, "binSize") != null ? Xml.doubleAttr(Xml.child(binning, "binSize"), "val", 1)
-                    : sig2(3.5 * sd / Math.cbrt(v.size())); // Excel は幅を有効数字 2 桁に丸める (exp49: 17.749 → 18、exp72: 6.62 → 6.6)
+                    : sig2(3.5 * sd / Math.cbrt(v.size())); // Excel は幅を有効数字 2 桁に丸める
             int bins = Xml.child(binning, "binCount") != null ? Xml.intAttr(Xml.child(binning, "binCount"), "val", 5)
                     : (int) Math.max(1, Math.ceil((mx - mn) / Math.max(w, 1e-12)));
             if (Xml.child(binning, "binCount") != null) w = (mx - mn) / bins;
@@ -462,11 +461,11 @@ final class ChartExPainter {
         for (double x : v) mean += x;
         mean /= v.size();
         ChartPainter.Axis ax = new ChartPainter.Axis();
-        ax.exactHeadroom = true; // 箱ひげ図は最大値が目盛りに重なるときだけ上に 1 目盛り足す (Excel の印刷 exp90: 97 で 0〜100)
+        ax.exactHeadroom = true; // 箱ひげ図は最大値が目盛りに重なるときだけ上に 1 目盛り足す (97 で 0〜100)
         Rectangle2D plot = valueAxis(cv, box, ax, Math.min(0, v.get(0)), v.get(v.size() - 1), catSpace(d), false, null);
         double cx = plot.getCenterX(), bw = plot.getWidth() / 2;
         PdfCanvas.Stroke st = new PdfCanvas.Stroke(0.75f);
-        // ひげ・箱の枠・中央値・平均の印は系列の色を 0.8 倍に暗くした色、ひげの横線は箱の幅の 0.3 倍 (Excel の印刷 exp49)
+        // ひげ・箱の枠・中央値・平均の印は系列の色を 0.8 倍に暗くした色、ひげの横線は箱の幅の 0.3 倍
         Color f = accent(0), line = new Color((int) (f.getRed() * 0.8), (int) (f.getGreen() * 0.8), (int) (f.getBlue() * 0.8));
         double cap = bw * 0.15;
         cv.line(cx, vy(ax, hi, plot), cx, vy(ax, q3, plot), st, line);
@@ -569,7 +568,7 @@ final class ChartExPainter {
         for (int i = 0; i < d.vals.size(); i++) tot += val(d, i);
         if (tot <= 0) return;
         double rad = Math.min(box.getWidth(), box.getHeight()) / 2, cx = box.getCenterX(), cy = box.getCenterY();
-        // 中央に穴を空け、穴と各階層の輪を同じ幅にする (Excel の印刷 exp49: 2 階層で半径の 1/3 ずつ)
+        // 中央に穴を空け、穴と各階層の輪を同じ幅にする (2 階層で半径の 1/3 ずつ)
         int lv = Math.max(1, d.levels.size());
         double r0 = rad / (lv + 1), r1 = lv > 1 ? rad * 2 / (lv + 1) : rad, start = 90;
         List<String> leaf = d.levels.isEmpty() ? List.of() : d.levels.get(d.levels.size() - 1);

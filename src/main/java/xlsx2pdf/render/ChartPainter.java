@@ -151,7 +151,7 @@ public final class ChartPainter {
         double dispUnit = 1;
         String dispUnitName;
         boolean dispUnitLbl;
-        /** 上端の余裕の目盛りを、最大値が目盛りにちょうど重なるときだけ足す (Excel 2016 以降のグラフ。exp90 の箱ひげ図)。 */
+        /** 上端の余裕の目盛りを、最大値が目盛りにちょうど重なるときだけ足す (Excel 2016 以降のグラフ)。 */
         boolean exactHeadroom;
         /** 目盛りの区間の数の上限。 */
         int maxIntervals = MAX_INTERVALS;
@@ -210,7 +210,7 @@ public final class ChartPainter {
         if (csSpPr != null && DrawingPainter.fillElement(csSpPr) == null) bg = solid(Color.WHITE);
         dp.fillShape(cv, frameArea, bg, null);
         DrawingPainter.LineStyle border = csSpPr != null ? dp.line(Xml.child(csSpPr, "ln"), null, null) : null;
-        if (csSpPr == null || Xml.child(csSpPr, "ln") == null) border = gridDefault(); // 旧来のスタイルも目盛線と同じ灰色の線 (exp75)
+        if (csSpPr == null || Xml.child(csSpPr, "ln") == null) border = gridDefault(); // 旧来のスタイルも目盛線と同じ灰色の線
 
         cv.save();
         cv.clip(area);
@@ -245,8 +245,8 @@ public final class ChartPainter {
         }
         if (title != null || autoTitle != null) {
             String fallback = title != null ? null : autoTitle;
-            // 系列名を題名にするのは、グラフ全体で系列が 1 つのとき (組み合わせグラフで 2 つなら「グラフ タイトル」。exp72)
-            // 円グラフは先頭の系列だけを描くので、系列が複数でも先頭の系列名 (rand30 rd08)
+            // 系列名を題名にするのは、グラフ全体で系列が 1 つのとき (組み合わせグラフで 2 つなら「グラフ タイトル」)
+            // 円グラフは先頭の系列だけを描くので、系列が複数でも先頭の系列名
             if (title != null && Xml.child(title, "tx") == null && groups.size() > 0
                     && (allSeries(groups).size() == 1 || groups.size() == 1 && groups.get(0).type.equals("pie")))
                 fallback = groups.get(0).series.get(0).named ? groups.get(0).series.get(0).name : null;
@@ -609,12 +609,12 @@ public final class ChartPainter {
     // ------------------------------------------------------------------ 色と文字
 
     /** 系列の色 (明示の指定、なければ既定の色)。 */
-    /** 白黒印刷の面の枠の太さ (pt。exp124 bw_area) */
+    /** 白黒印刷の面の枠の太さ (pt) */
     static final double BW_AREA_LINE = 1.5;
     /** 白黒印刷の系列・要素の色の順 (Excel の印刷: 黒、白、灰色の模様に近い濃さ)。 */
     private static final Color[] BW = {Color.BLACK, Color.WHITE, new Color(0x808080), new Color(0x404040), new Color(0xC0C0C0),
             new Color(0xE0E0E0), new Color(0x909090), new Color(0x707070)};
-    /** 白黒印刷の 3 番目からの網かけ (Excel の印刷 exp126: 点の濃さ 4 つと横縞・縦縞。色の近似は BW の同じ位置) */
+    /** 白黒印刷の 3 番目からの網かけ (点の濃さ 4 つと横縞・縦縞。色の近似は BW の同じ位置) */
     private static final String[] BW_PATT = {null, null, "pct50", "pct75", "pct25", "pct10", "ltHorz", "ltVert"};
 
     /** 塗りの色。白黒印刷の網かけの色なら網かけにする。 */
@@ -697,7 +697,7 @@ public final class ChartPainter {
         if (dp.bw) return g.varyColors && g.series.size() == 1 ? BW[i % BW.length] : s.color;
         if (g.varyColors && g.series.size() == 1) {
             if (legacy && (g.type.equals("pie") || g.type.equals("doughnut"))) {
-                // 旧来のスタイルの円 (Excel の印刷 exp75): 色 × 0.88。7〜12 番目は accent を白と半々に混ぜた色 × 0.88
+                // 旧来のスタイルの円: 色 × 0.88。7〜12 番目は accent を白と半々に混ぜた色 × 0.88
                 Color c = (i / 6) % 2 == 1 ? wireColor(autoColor(i % 6)) : autoColor(i);
                 return shade(c, LEGACY_PIE_SHADE);
             }
@@ -775,7 +775,7 @@ public final class ChartPainter {
     private double lineH(TStyle t) {
         FontManager.Spec sp = t.spec();
         // グラフの文字の行の高さ: 行の高さの表の値と、東アジアのフォントの winAscent + winDescent の 1.2 倍の大きい方
-        // (游ゴシックは表の 1.565em、ＭＳ Ｐゴシックは 1.2em、メイリオは 1.8em。Excel の印刷 exp92)
+        // (游ゴシックは表の 1.565em、ＭＳ Ｐゴシックは 1.2em、メイリオは 1.8em)
         FontManager.Face ea = sp.eaFace != null ? sp.eaFace : sp.face;
         return Math.max(sp.ascent + sp.descent, (ea.ascent + ea.descent) * 1.2) * t.size;
     }
@@ -809,7 +809,7 @@ public final class ChartPainter {
                     if (rpr != null && rpr.hasAttribute("sz")) maxSize = Math.max(maxSize, Xml.intAttr(rpr, "sz", 1400) / 100.0);
                 }
             }
-            // 行の高さは文字の書体で決める (strRef の題名と同じ規則。exp46 の旧来のスタイル 18pt)。文字の枠の上の余白 (3.6pt) の分だけ上に描く
+            // 行の高さは文字の書体で決める (strRef の題名と同じ規則)。文字の枠の上の余白 (3.6pt) の分だけ上に描く
             TStyle tm = style(null);
             tm.size = (float) maxSize;
             tm.bold = t.bold;
@@ -831,14 +831,14 @@ public final class ChartPainter {
             }
         }
         if (s == null || s.isEmpty()) return 0;
-        // 題名の行の高さと基線は、文字に使う書体で決まる (Excel の印刷 exp72 の 14pt: 欧文だけの「V」は欧文の書体の
+        // 題名の行の高さと基線は、文字に使う書体で決まる (14pt: 欧文だけの「V」は欧文の書体の
         // アセントで基線を置き、和文を含む「グラフ タイトル」は行が 0.464em 高く、基線が 0.06em 下)
         FontManager.Spec tsp = t.spec();
         boolean cjk = s.codePoints().anyMatch(FontManager::isCjk);
         double h = lineH(t) + (cjk ? TITLE_CJK_EXTRA * t.size : 0);
         titleExtra = cjk ? TITLE_CJK_EXTRA * t.size : 0;
         double by = box.getY() + (cjk ? TITLE_CJK_DROP * t.size : -Math.max(0, tsp.ascent - tsp.face.ascent) * t.size);
-        // 行の高さを東アジアのフォントの寸法で広げた分 (メイリオなど) の一部だけ基線も下がる (Excel の印刷 exp92)
+        // 行の高さを東アジアのフォントの寸法で広げた分 (メイリオなど) の一部だけ基線も下がる
         by += (lineH(t) - (tsp.ascent + tsp.descent) * t.size) * 0.5;
         text(cv, s, box.getCenterX(), by, t, 0, -1);
         return h;
@@ -852,7 +852,7 @@ public final class ChartPainter {
         return tt;
     }
 
-    /** 表示単位のラベルの左の余白 (pt。Excel の印刷 exp72)。 */
+    /** 表示単位のラベルの左の余白 (pt)。 */
     static final double DISP_UNIT_PAD = 4;
 
     /** 書式付きの題名の文字の枠の上の余白 (bodyPr の既定 tIns、pt)。 */
@@ -863,46 +863,46 @@ public final class ChartPainter {
         return lineH(t) + (s != null && s.codePoints().anyMatch(FontManager::isCjk) ? TITLE_CJK_EXTRA * t.size : 0);
     }
 
-    /** 旧来のスタイルの値の軸のラベルの左に足す場所 (pt。exp75 の実測で 3pt 広い)。 */
+    /** 旧来のスタイルの値の軸のラベルの左に足す場所 (pt)。 */
     static final double LEGACY_LABEL_EXTRA = 3;
-    /** 旧来のスタイルの第 2 軸のラベルは、さらに 5.8pt 右 (Excel の印刷 exp46)。 */
+    /** 旧来のスタイルの第 2 軸のラベルは、さらに 5.8pt 右。 */
     static final double LEGACY_SEC_LABEL_EXTRA = 5.8;
     /** 系列が奥行きに並ぶ 3D の目盛りの最小の間隔 (通常の何倍か)。 */
     static final double RIBBON_VGAP = 1.2;
-    /** 斜投影の 3D の系列名と床の右の縁の間 (pt。Excel の印刷 exp72)。 */
+    /** 斜投影の 3D の系列名と床の右の縁の間 (pt)。 */
     static final double SER_LABEL_GAP = 10.4;
-    /** 系列を奥に並べる 3D 縦棒 (系列 2〜3) の高さの倍率: 題名か凡例があれば 0.68 (Excel の印刷 exp72 の円柱・円錐・ピラミッド、exp50・52)、なければ 0.75 (exp73・74)。 */
-    static final double RIBBON_TITLED = 0.68; // 箱の形で系列 3 なら 0.8 (exp88)
-    /** 旧来のスタイルで軸がプロットの途中で交わるとき: 下の場所を 5.5pt 詰める、縦の軸が途中なら左に 9pt (Excel の印刷 exp47・48)。 */
+    /** 系列を奥に並べる 3D 縦棒 (系列 2〜3) の高さの倍率: 題名か凡例があれば 0.68、なければ 0.75。 */
+    static final double RIBBON_TITLED = 0.68; // 箱の形で系列 3 なら 0.8
+    /** 旧来のスタイルで軸がプロットの途中で交わるとき: 下の場所を 5.5pt 詰める、縦の軸が途中なら左に 9pt。 */
     static final double LEGACY_CROSS_BOTTOM_CUT = 5.5, LEGACY_INSIDE_LEFT = 9;
-    /** 旧来のスタイルのレーダーの値のラベルと上向きの線の間 (文字の大きさに対する比。Excel の印刷 exp75: 10pt で 9pt)。 */
+    /** 旧来のスタイルのレーダーの値のラベルと上向きの線の間 (文字の大きさに対する比。10pt で 9pt)。 */
     static final double LEGACY_RADAR_VAL_GAP = 0.9;
     /** 旧来のスタイルの四角の凡例の印: 大きさと左の空き (印の既定の大きさ 0.7em に対する比)。 */
     static final double LEGACY_SQ_KEY = 5.2 / 7, LEGACY_SQ_INSET = 3.0 / 7;
-    /** 旧来のスタイルの縦の凡例の行の間隔 (文字の大きさに対する比) と、線の印の左の空き (pt)。Excel の印刷 exp75。 */
+    /** 旧来のスタイルの縦の凡例の行の間隔 (文字の大きさに対する比) と、線の印の左の空き (pt)。 */
     static final double LEGACY_LEGEND_PITCH = 1.81, LEGACY_KEY_INSET = 2.6;
-    /** 旧来のスタイルの縦の値のラベルは、さらに 4.5pt 左 (目盛の線の端から約 6.5pt。Excel の印刷 exp75)。 */
+    /** 旧来のスタイルの縦の値のラベルは、さらに 4.5pt 左 (目盛の線の端から約 6.5pt)。 */
     static final double LEGACY_VAL_LABEL_OUT = 4.5;
-    /** 上の凡例の線の印は 2.3pt 上 (Excel の印刷 exp81 のレーダー)。 */
+    /** 上の凡例の線の印は 2.3pt 上。 */
     static final double LEGEND_TOP_RAISE = 2.3;
-    /** 旧来のスタイル: 題名とプロットの間を 1pt 詰める、散布図の下を 1pt 多く空ける (Excel の印刷 exp75)。 */
+    /** 旧来のスタイル: 題名とプロットの間を 1pt 詰める、散布図の下を 1pt 多く空ける。 */
     static final double LEGACY_TITLE_CUT = 1, LEGACY_XY_BOTTOM = 1;
 
-    /** 旧来のスタイルの円の直径 ÷ プロットの短い辺 (exp75)。 */
+    /** 旧来のスタイルの円の直径 ÷ プロットの短い辺。 */
     static final double LEGACY_PIE = 0.97, LEGACY_PIE_SHADE = 0.88;
 
-    /** レーダーの項目名と外周の間 (pt。exp75)。 */
+    /** レーダーの項目名と外周の間 (pt)。 */
     static final double RADAR_LABEL_GAP = 2;
-    /** 円・ドーナツの直径 = プロットの短い辺 − この値 (pt。Excel の印刷 exp81)。 */
+    /** 円・ドーナツの直径 = プロットの短い辺 − この値 (pt)。 */
     static final double PIE_INSET = 7;
-    /** レーダーの値のラベルの右端と上向きの線の間 (文字の大きさに対する比。Excel の印刷 exp81: 9pt で 9.5pt)。 */
+    /** レーダーの値のラベルの右端と上向きの線の間 (文字の大きさに対する比。9pt で 9.5pt)。 */
     static final double RADAR_VAL_GAP = 1.05;
 
     /** 線の系列のある凡例の印の幅 (文字の大きさに対する倍率)。 */
     static final double LEGEND_LINE_KEY = 2.3;
-    /** 凡例の四角の印の大きさ (文字の大きさに対する比。Excel の印刷 exp81: 9pt で棒 5pt、円の要素 3pt)。 */
+    /** 凡例の四角の印の大きさ (文字の大きさに対する比。9pt で棒 5pt、円の要素 3pt)。 */
     static final double LEGEND_BAR_KEY = 5.0 / 9, LEGEND_PIE_KEY = 3.0 / 9;
-    /** 下の凡例を下げる量と、四角の印を文字に対して下げる量 (pt、Excel の印刷 exp81)。 */
+    /** 下の凡例を下げる量と、四角の印を文字に対して下げる量。 */
     static final double LEGEND_BOTTOM_DROP = 0.8, LEGEND_KEY_DROP = 0.7;
     /** 縦に並べる凡例の項目の間隔 (文字の大きさに対する比)。 */
     static final double LEGEND_V_PITCH = 1.875;
@@ -914,11 +914,11 @@ public final class ChartPainter {
 
     /** 和文を含む題名の行の高さの増分と基線の下げ (em)。 */
     static final double TITLE_CJK_EXTRA = 0.464, TITLE_CJK_DROP = 0.06;
-    /** 項目ラベルの行の下に足す余白 (pt)。Excel の印刷 exp72: 9pt の欧文のラベルで 15.5pt = 行 11.56 + 4。 */
+    /** 項目ラベルの行の下に足す余白 (pt。9pt の欧文のラベルで 15.5pt = 行 11.56 + 4)。 */
     static final double CAT_LABEL_PAD = 4;
     /** 上の軸 (横棒の第 2 軸) のラベルの行の下の余白 (pt)。 */
     static final double TOP_LABEL_PAD = 1.5;
-    /** 値の軸が右 (crosses="max") のときのプロットの左の余白 (pt。exp72)。 */
+    /** 値の軸が右 (crosses="max") のときのプロットの左の余白 (pt)。 */
     static final double CROSS_MAX_SHIFT = 3.6;
 
     /** タイトルの手動レイアウトの矩形。 */
@@ -947,7 +947,7 @@ public final class ChartPainter {
         List<Color> colors = new ArrayList<>();
         List<Boolean> lineSym = new ArrayList<>();
         List<Series> legSeries = new ArrayList<>();
-        List<Boolean> markSym = new ArrayList<>(); // 線の印にマーカーも重ねる系列 (マーカー付きの折れ線。Excel の印刷 exp46)
+        List<Boolean> markSym = new ArrayList<>(); // 線の印にマーカーも重ねる系列 (マーカー付きの折れ線)
         java.util.Set<Integer> hollow = new java.util.HashSet<>();
         java.util.Set<Integer> deleted = new java.util.HashSet<>();
         for (Element le : Xml.children(legend, "legendEntry")) {
@@ -968,7 +968,7 @@ public final class ChartPainter {
             int k = 0;
             for (double v = va.lo; v < va.hi - va.unit * 1e-6 && k < 40; v = step(va, v), k++) {
                 names.add(axisLabel(va, v, fmt) + "-" + axisLabel(va, step(va, v), fmt));
-                colors.add(autoColor(k)); // ワイヤーフレームも元の色の枠 (exp72)
+                colors.add(autoColor(k)); // ワイヤーフレームも元の色の枠
                 if (g0.wireframe) hollow.add(names.size() - 1);
                 lineSym.add(false);
             }
@@ -990,14 +990,14 @@ public final class ChartPainter {
                         colors.add(s.color);
                         while (legSeries.size() < names.size() - 1) legSeries.add(null);
                         legSeries.add(s);
-                        lineSym.add(g.type.equals("line") && !g.is3D || (g.type.equals("scatter") && !g.scatterStyle.equals("marker")) || g.type.equals("radar")); // 3D の折れ線は四角の印 (exp88)
+                        lineSym.add(g.type.equals("line") && !g.is3D || (g.type.equals("scatter") && !g.scatterStyle.equals("marker")) || g.type.equals("radar")); // 3D の折れ線は四角の印
                         while (markSym.size() < names.size() - 1) markSym.add(false);
                         markSym.add((g.type.equals("line") && !g.is3D || g.type.equals("scatter") && !g.scatterStyle.equals("marker")) && g.markers);
                     }
                     k++;
                 }
             }
-            // 横棒の縦の凡例は、棒の並び (下から系列順) に合わせて逆順 (Excel の印刷 exp75)
+            // 横棒の縦の凡例は、棒の並び (下から系列順) に合わせて逆順
             boolean allHoriz = true;
             for (Group g : groups) allHoriz &= g.type.equals("bar") && g.horizontal;
             if (allHoriz && (pos.equals("r") || pos.equals("l") || pos.equals("tr"))) {
@@ -1013,14 +1013,14 @@ public final class ChartPainter {
         if (names.isEmpty()) return plot;
         double lh = lineH(t) * 1.05;
         double sym = t.size * 0.7;
-        // 線の系列があれば、すべての印を文字の大きさ × 2.3 の幅にし (棒は横長の四角)、印と文字の間を 1.5pt、項目の間を 7pt にする (Excel の印刷 exp72・exp75)
+        // 線の系列があれば、すべての印を文字の大きさ × 2.3 の幅にし (棒は横長の四角)、印と文字の間を 1.5pt、項目の間を 7pt にする
         boolean wideKeys = false;
         for (int i = 0; i < lineSym.size(); i++)
             if (lineSym.get(i) && !(i < legSeries.size() && legSeries.get(i) != null && lineNone(legSeries.get(i)))) wideKeys = true;
         double symW = wideKeys ? t.size * LEGEND_LINE_KEY : sym, keyGap = wideKeys ? 1.5 : 4, itemGap = wideKeys ? 7 : 10;
         boolean squareKeys = false;
-        if (!wideKeys && !legacy) { // 等高線の区間の凡例も同じ四角の印 (exp72)
-            // 四角の印 (Excel の印刷 exp81、9pt): 棒などは 5pt、印と文字の間 2.2pt、項目の間 4.9pt。円・ドーナツの要素は 3pt、3pt、7.1pt
+        if (!wideKeys && !legacy) { // 等高線の区間の凡例も同じ四角の印
+            // 四角の印: 棒などは 5pt、印と文字の間 2.2pt、項目の間 4.9pt。円・ドーナツの要素は 3pt、3pt、7.1pt
             sym = symW = t.size * (pieLegend && !dp.bw ? LEGEND_PIE_KEY : LEGEND_BAR_KEY); // 白黒印刷は円の要素も 5/9em
             keyGap = pieLegend ? 3.0 : 2.2;
             itemGap = pieLegend ? 7.1 : 4.9;
@@ -1033,8 +1033,8 @@ public final class ChartPainter {
         Element ml = Xml.path(legend, "layout", "manualLayout");
         Rectangle2D box;
         boolean modernWide = wideKeys && !legacy;
-        if (vertical && (squareKeys || modernWide)) lh = t.size * LEGEND_V_PITCH; // 縦に並べる四角の印・線の印の間隔 (Excel の印刷 exp81: 9pt で 16.9pt、exp89)
-        if (vertical && legacy) lh = t.size * LEGACY_LEGEND_PITCH; // 旧来のスタイル: 10pt で 18.1pt (exp75)
+        if (vertical && (squareKeys || modernWide)) lh = t.size * LEGEND_V_PITCH; // 縦に並べる四角の印・線の印の間隔
+        if (vertical && legacy) lh = t.size * LEGACY_LEGEND_PITCH; // 旧来のスタイル: 10pt で 18.1pt
         if (vertical) {
             double w = symW + keyGap + maxW + 6;
             double h = names.size() * lh + 4;
@@ -1042,17 +1042,17 @@ public final class ChartPainter {
             double y = plot.getY() + (plot.getHeight() - h) / 2 - (squareKeys || modernWide ? 1.1 : 0);
             box = new Rectangle2D.Double(x, y, w, h);
             if (!overlay) {
-                double ex = squareKeys || modernWide ? 3 : 0; // 四角の印・線の印の凡例はプロットとの間を 3pt 広く (Excel の印刷 exp81・89)
+                double ex = squareKeys || modernWide ? 3 : 0; // 四角の印・線の印の凡例はプロットとの間を 3pt 広く
                 if (pos.equals("l")) plot = new Rectangle2D.Double(plot.getX() + w + 6 + ex, plot.getY(), plot.getWidth() - w - 6 - ex, plot.getHeight());
                 else plot = new Rectangle2D.Double(plot.getX(), plot.getY(), plot.getWidth() - w - 6 - ex, plot.getHeight());
             }
         } else {
             double total = 0;
             for (String n : names) total += symW + keyGap + textWidth(n, t) + itemGap;
-            // 最後の項目の後ろは今までどおり。四角の印 (squareKeys) は印から最後の文字までを中央に置く (Excel の印刷 exp81)
-            // 線の印 (wideKeys) も同じ (exp81 の折れ線・レーダー)
+            // 最後の項目の後ろは今までどおり。四角の印 (squareKeys) は印から最後の文字までを中央に置く
+            // 線の印 (wideKeys) も同じ
             total -= squareKeys || wideKeys && !legacy ? itemGap - 3.4 : itemGap - 10;
-            // 1 行に収まらなければ、最も長い項目の幅の列に並べて複数行にする (Excel の印刷 exp125 dleg・pleg)
+            // 1 行に収まらなければ、最も長い項目の幅の列に並べて複数行にする
             legCols = 0;
             double avail = inner.getWidth();
             if (total > avail && names.size() > 1 && ml == null) {
@@ -1114,7 +1114,7 @@ public final class ChartPainter {
     }
 
     /**
-     * 凡例の記号。線の系列で線が「なし」なら、マーカーだけを描く (マーカーもなければ描かない。Excel の印刷 exp72 の株価)。
+     * 凡例の記号。線の系列で線が「なし」なら、マーカーだけを描く (マーカーもなければ描かない)。
      */
     private void legendSymbol(PdfCanvas cv, double x, double y, double w, double sym, Color c, boolean line, Series s) throws IOException {
         if (line && s != null && lineNone(s)) {
@@ -1127,19 +1127,19 @@ public final class ChartPainter {
     /** 凡例の記号 (線またはマーカー、四角) を描く。 */
     private void drawSymbol(PdfCanvas cv, double x, double cy, double w, double h, Color c, boolean line) throws IOException {
         if (line && legacy && legendWide) {
-            // 旧来のスタイルの線の印: 2.75pt の太さで、2.6pt 右から始まる (Excel の印刷 exp75)
+            // 旧来のスタイルの線の印: 2.75pt の太さで、2.6pt 右から始まる
             cv.line(x + LEGACY_KEY_INSET, cy, x + w, cy, new PdfCanvas.Stroke(2.75f), c);
         } else if (line) {
             cv.line(x, cy, x + (legendWide ? w : w * 1.6), cy, new PdfCanvas.Stroke(2f), c);
         } else if (legendWide) {
             cv.fillRect(x, cy - h * 0.35, w, h * 0.7, c);
         } else if (legacy && !dp.bw) {
-            // 旧来のスタイルの四角の印: 0.52em 角で、0.3em 右 (10pt で 5.2pt 角、3pt。Excel の印刷 exp75)
+            // 旧来のスタイルの四角の印: 0.52em 角で、0.3em 右 (10pt で 5.2pt 角、3pt)
             double k = h * LEGACY_SQ_KEY;
             cv.fillRect(x + h * LEGACY_SQ_INSET, cy - k / 2, k, k, c);
         } else {
             cv.fillRect(x, cy - h / 2, w, h, c);
-            // 白黒印刷: 四角の印に黒の枠 (Excel の印刷 exp59 の bw)
+            // 白黒印刷: 四角の印に黒の枠
             if (dp.bw) cv.stroke(new Rectangle2D.Double(x, cy - h / 2, w, h), new PdfCanvas.Stroke(0.5f), Color.BLACK);
         }
     }
@@ -1156,7 +1156,7 @@ public final class ChartPainter {
         return u * mag;
     }
 
-    /** 自動の目盛りの区間の数の上限 (Excel の印刷 exp72 のバブル: −1〜10 の 1 刻み、−4〜18 の 2 刻み)。 */
+    /** 自動の目盛りの区間の数の上限 (−1〜10 の 1 刻み、−4〜18 の 2 刻み)。 */
     static final int MAX_INTERVALS = 11;
 
     /** Excel に似た値の軸の自動目盛り。 */
@@ -1229,7 +1229,7 @@ public final class ChartPainter {
 
     /**
      * 第 2 軸 (値の軸が右か上) のグループが先に保存されているとき、主軸のグループを先頭にする。
-     * 例: 折れ線 (第 2 軸) + 散布図 (主軸) の順の組み合わせ (rand30 rd09。先頭で軸を決めると散布図の X 軸がなかった)。
+     * 例: 折れ線 (第 2 軸) + 散布図 (主軸) の順の組み合わせ (先頭で軸を決めると散布図の X 軸がなかった)。
      */
     private static List<Group> primaryFirst(List<Group> groups, List<Axis> axes) {
         if (groups.size() < 2 || !isSecondary(groups.get(0), axes)) return groups;
@@ -1304,8 +1304,8 @@ public final class ChartPainter {
                 for (double[] lh : errorSpans(s, eb)) if (lh != null) { dmin = Math.min(dmin, lh[0]); dmax = Math.max(dmax, lh[1]); }
             }
         }
-        // バブル: 最大のバブルの半径 ÷ プロットの短い辺 = R の分だけ、x・y の両方の範囲を広げる (範囲 ÷ (1 − 2R)。Excel の印刷 exp72:
-        // 倍率 25〜300% の x・y の目盛りの範囲と一致)
+        // バブル: 最大のバブルの半径 ÷ プロットの短い辺 = R の分だけ、x・y の両方の範囲を広げる (範囲 ÷ (1 − 2R)。
+        // 倍率 25〜300% の x・y の目盛りの範囲が Excel と一致)
         double bubR = g.bubble ? Math.min(0.4, BUBBLE_A * Math.max(0, g.bubbleScale) / (Math.max(0, g.bubbleScale) + BUBBLE_K) / 2) : 0;
         if (bubR > 0 && dmax > dmin) {
             double span = (dmax - dmin) / (1 - 2 * bubR);
@@ -1344,7 +1344,7 @@ public final class ChartPainter {
                 xmin -= bubR * span; xmax += bubR * span;
             }
             if (bubR > 0) xValAx.noHeadroom = true;
-            // 書式のあるグラフは、y のラベルの分 (20pt) を除いた長さで目盛りを決める (Excel の印刷 exp71・72・81)
+            // 書式のあるグラフは、y のラベルの分 (20pt) を除いた長さで目盛りを決める
             autoScale(xValAx, xmin, xmax, box.getWidth() - (!modern() ? 0 : H_LEN_CUT), hGap());
         }
 
@@ -1365,9 +1365,9 @@ public final class ChartPainter {
                 if (!horiz) {
                     double mw = 0;
                     for (double v = valAx2.lo; v <= valAx2.hi + valAx2.unit * 1e-6; v = step(valAx2, v)) mw = Math.max(mw, textWidth(axisLabel(valAx2, v, srcFmt2), vt2));
-                    // 第 2 軸のラベル: プロットとの間は 0.91em + 0.8pt、右の場所はそれ − 3.1pt (Excel の印刷 exp72)
+                    // 第 2 軸のラベル: プロットとの間は 0.91em + 0.8pt、右の場所はそれ − 3.1pt
                     right = modern() ? mw + valLabelGap(vt2) + SEC_LABEL_EXTRA - SEC_RIGHT_CUT : mw + 6;
-                } else topSpace = textLineH(vt2, List.of("0")) + TOP_LABEL_PAD - (modern() ? 1.2 : 0); // exp72 の sec_bar
+                } else topSpace = textLineH(vt2, List.of("0")) + TOP_LABEL_PAD - (modern() ? 1.2 : 0);
             }
             if (valAx2 != null && valAx2.titleEl != null) {
                 if (!horiz) right += lineH(vt2) + 4; else topSpace += lineH(vt2) + 4;
@@ -1379,20 +1379,20 @@ public final class ChartPainter {
                     double mw = 0;
                     for (double v = valAx.lo; v <= valAx.hi + valAx.unit * 1e-6; v = step(valAx, v)) mw = Math.max(mw, textWidth(axisLabel(valAx, v, srcFmt), vt));
                     // 交差位置が最大 (crosses="max") なら、値の軸と目盛ラベルはプロットの右
-                    // 値の軸がプロットの途中の項目で交わるときは、ラベルは軸の横に描くので左に場所を取らない (Excel の印刷 exp72)
+                    // 値の軸がプロットの途中の項目で交わるときは、ラベルは軸の横に描くので左に場所を取らない
                     boolean nextTo = "nextTo".equals(valAx.tickLblPos == null ? "nextTo" : valAx.tickLblPos);
                     boolean inside = !scatter && valAx.crossesAt != null && valAx.crossesAt > 1 && nextTo
                             || scatterZeroInside(scatter, valAx, xValAx) && nextTo;
                     if ("max".equals(valAx.crosses) && !scatter) {
                         right += (modern() ? mw + valLabelGap(vt) - VAL_LABEL_OUT : mw + 6) - CROSS_MAX_SHIFT; left = CROSS_MAX_SHIFT;
-                    } else if (inside && modern()) left = INSIDE_LEFT; // 軸が途中で交わるときも左に 3.5pt (Excel の印刷 exp72)
+                    } else if (inside && modern()) left = INSIDE_LEFT; // 軸が途中で交わるときも左に 3.5pt
                     else if (inside && legacy) left = LEGACY_INSIDE_LEFT;
                     else if (!inside) left = mw + valLabelGap(vt) + (!modern() ? 2 : -VAL_LABEL_OUT) + (legacy ? LEGACY_LABEL_EXTRA : 0);
                 }
                 if (catVisible) bottom = textLineH(ct, List.of("0")) + CAT_LABEL_PAD + (scatter && modern() ? 1.3 : 0);
                 // 散布図の x の軸が y = 0 で交わる (y の範囲が 0 をまたぐ) ときは、ラベルを軸の横に描くので下に場所を取らない
                 if (catVisible && scatterZeroInside(scatter, xValAx, valAx))
-                    bottom = !valVisible ? 4 : modern() ? vt.size * NEG_BOTTOM : lineH(vt) / 2 + 1 - LEGACY_CROSS_BOTTOM_CUT; // 項目軸の交差と同じ (exp72 のバブル、exp48)
+                    bottom = !valVisible ? 4 : modern() ? vt.size * NEG_BOTTOM : lineH(vt) / 2 + 1 - LEGACY_CROSS_BOTTOM_CUT; // 項目軸の交差と同じ
                 if (catVisible && !scatter) bottom = catLabelHeight(g, catAx, ct, (box.getWidth() - left) / Math.max(1, nCats)) + CAT_LABEL_PAD
                         + catBottomExtra(ct, g.series.isEmpty() ? List.of() : g.series.get(0).cats);
                 // 項目軸がプロットの途中で交わる (負の値があり 0 で交わる) とき、ラベルは軸の横に描くので、下に場所を取らない
@@ -1401,7 +1401,7 @@ public final class ChartPainter {
                     double crossV = "max".equals(catAx.crosses) ? valAx.hi : "min".equals(catAx.crosses) ? valAx.lo
                             : catAx.crossesAt != null ? catAx.crossesAt : 0;
                     if (crossV > valAx.lo + 1e-9 && !valAx.reverse)
-                        bottom = valVisible ? (modern() ? vt.size * NEG_BOTTOM : lineH(vt) / 2 + 1 - LEGACY_CROSS_BOTTOM_CUT) : 4; // 書式のあるグラフは 0.53em (exp81 の負の値)
+                        bottom = valVisible ? (modern() ? vt.size * NEG_BOTTOM : lineH(vt) / 2 + 1 - LEGACY_CROSS_BOTTOM_CUT) : 4; // 書式のあるグラフは 0.53em
                 }
             } else {
                 if (catVisible) {
@@ -1418,7 +1418,7 @@ public final class ChartPainter {
                 left += horizontalTitle(leftAx) ? textWidth(axisTitleText(leftAx), titleSize(axisTitleStyle(leftAx))) + H_TITLE_GAP
                         : lineH(horiz ? ct : vt) + AXIS_TITLE_GAP;
             else if (!horiz && valAx.dispUnitLbl && valAx.dispUnitName != null)
-                left += lineH(horiz ? ct : vt) + 4 + TITLE_CJK_EXTRA * dispUnitStyle(valAx).size + DISP_UNIT_PAD; // 和文の行 (exp72 の実測)
+                left += lineH(horiz ? ct : vt) + 4 + TITLE_CJK_EXTRA * dispUnitStyle(valAx).size + DISP_UNIT_PAD; // 和文の行
             if (bottomAx != null && bottomAx.titleEl != null && !axisTitleText(bottomAx).isEmpty())
                 bottom += lineH(titleSize(axisTitleStyle(bottomAx))) + AXIS_TITLE_GAP;
             if (dTable != null && !horiz && !scatter) {
@@ -1427,23 +1427,23 @@ public final class ChartPainter {
                 bottom = rowH * (1 + allSeries(groups).size()) - DT_BOTTOM;
                 left = Math.max(left, dtLeftWidth(groups, ct) + DT_INSET);
             }
-            // 横の値の軸 (横棒・散布図の x・横棒の上の第 2 軸) は、最後のラベルの半分 + 3pt を右に空ける (Excel の印刷 exp72)
+            // 横の値の軸 (横棒・散布図の x・横棒の上の第 2 軸) は、最後のラベルの半分 + 3pt を右に空ける
             double rOver = 0;
             Axis hv = scatter ? xValAx : horiz ? valAx : null;
             if (hv != null && !hv.deleted && !"none".equals(hv.tickLblPos))
                 rOver = Math.max(rOver, textWidth(axisLabel(hv, hv.hi, scatter ? "General" : srcFmt), scatter ? ct : vt) / 2 + 3);
             if (horiz && val2Visible) rOver = Math.max(rOver, textWidth(axisLabel(valAx2, valAx2.hi, srcFmt2), vt2) / 2 + 3);
-            // 項目を目盛りの上に置く (midCat) 横の項目軸も、最後の項目名の半分 + 3pt (Excel の印刷 exp75 の面)
+            // 項目を目盛りの上に置く (midCat) 横の項目軸も、最後の項目名の半分 + 3pt
             if (midCat && !horiz && catVisible && !g.series.isEmpty() && !g.series.get(0).cats.isEmpty()) {
                 List<String> cs = g.series.get(0).cats;
                 rOver = Math.max(rOver, textWidth(cs.get(cs.size() - 1), ct) / 2 + 3);
             }
             right = Math.max(right, rOver - 4);
-            // 最初のラベルも左に半分 + 3pt (y のラベルが軸の横に入り、左に場所を取らないとき。exp72 のバブル)
+            // 最初のラベルも左に半分 + 3pt (y のラベルが軸の横に入り、左に場所を取らないとき)
             if (hv != null && !hv.deleted && !"none".equals(hv.tickLblPos))
                 left = Math.max(left, textWidth(axisLabel(hv, hv.lo, scatter ? "General" : srcFmt), scatter ? ct : vt) / 2 + 3);
-            if (legacy && scatter) bottom += LEGACY_XY_BOTTOM; // 旧来のスタイルの散布図は x のラベルの下に 1pt 多く空く (exp75)
-            double htop = horiz && modern() ? H_PLOT_TOP : 0; // 書式のある横棒はプロットの上端が 0.6pt 上 (Excel の印刷 exp89)
+            if (legacy && scatter) bottom += LEGACY_XY_BOTTOM; // 旧来のスタイルの散布図は x のラベルの下に 1pt 多く空く
+            double htop = horiz && modern() ? H_PLOT_TOP : 0; // 書式のある横棒はプロットの上端が 0.6pt 上
             plot = new Rectangle2D.Double(box.getX() + left, box.getY() + 4 + topSpace - htop, Math.max(10, box.getWidth() - left - 4 - right),
                     Math.max(10, box.getHeight() - bottom - 4 - topSpace + htop));
             autoScale(valAx, dmin, dmax, horiz ? plot.getWidth() : plot.getHeight(), vgap);
@@ -1469,13 +1469,13 @@ public final class ChartPainter {
         boolean ribbon = g.is3D && ((g.type.equals("line") || g.type.equals("area") || g.type.equals("bar")) && "standard".equals(g.grouping)
                 || g.type.equals("surface"));
         if (g.is3D && (g.type.equals("bar") && !(horiz && ribbon) || ribbon && !horiz) && nCats > 0) {
-            // 直交軸の 3D (斜投影。Excel の印刷 exp73): 奥行き D の向きは (D sin rotY, −D sin rotX)。D は項目の幅 × m × 奥行き%
+            // 直交軸の 3D (斜投影): 奥行き D の向きは (D sin rotY, −D sin rotX)。D は項目の幅 × m × 奥行き%
             // (集合: (1 + gapDepth) / (系列数 + gapWidth)、積み上げ: (1 + gapDepth) / (1 + gapWidth)、系列を奥に並べる: 系列数)。
             // 正面の高さ (横棒は項目の向きの長さ) = 幅 × 比 (高さ% の指定、なければプロットの縦 ÷ 横 × 倍率)。
             // 正面と奥行きの全体がプロットに収まる最大の大きさにして、中央に置く
             if (!innerLayout) {
-                // 外側の余白 (グラフの内側の枠から。ラベルの場所と大きい方。exp73 の実測)
-                // ラベルがあれば、左に 4pt、下に 3.5pt 多く取る。横棒の値のラベルは右に 13pt、奥の系列のラベルは右に系列名 + 8.5pt (exp74)
+                // 外側の余白 (グラフの内側の枠から。ラベルの場所と大きい方)
+                // ラベルがあれば、左に 4pt、下に 3.5pt 多く取る。横棒の値のラベルは右に 13pt、奥の系列のラベルは右に系列名 + 8.5pt
                 double l0 = plot.getX() - box.getX(), b0 = box.getMaxY() - plot.getMaxY();
                 double l = Math.max(l0 > 0 ? l0 + OBLIQUE_LABEL_LEFT : 0, OBLIQUE_INSET[0]), rt = Math.max(box.getMaxX() - plot.getMaxX(), OBLIQUE_INSET[1]);
                 double tp = Math.max(plot.getY() - box.getY(), OBLIQUE_INSET[2]), bt = Math.max(b0 > 4.01 ? b0 + OBLIQUE_LABEL_BOTTOM : 0, OBLIQUE_INSET[3]);
@@ -1509,7 +1509,7 @@ public final class ChartPainter {
             obliqueWall(cv, "backWall", back, 1);
             obliqueWall(cv, "sideWall", horiz ? bottom : left, OBLIQUE_SIDE_SHADE);
             obliqueWall(cv, "floor", horiz ? left : bottom, OBLIQUE_FLOOR_SHADE);
-            // 系列が奥行きに並ぶ 3D は、目盛りを粗くする (Excel の印刷: 0〜15 を 5 刻み。exp50・52 の 2 系列は 0〜12 の 2 刻みでなく 0〜15)
+            // 系列が奥行きに並ぶ 3D は、目盛りを粗くする (Excel の印刷: 0〜15 を 5 刻み)
             autoScale(valAx, dmin, dmax, horiz ? plot.getWidth() : plot.getHeight(), ribbon ? vgap * RIBBON_VGAP : vgap);
         }
         dumpPlot = plot;
@@ -1550,7 +1550,7 @@ public final class ChartPainter {
                 else text(cv, lab, valAxisX - valLabelGap(vt) - (scatter ? tickOut(valAx) : 0) - (legacy ? LEGACY_VAL_LABEL_OUT : 0), p, vt, 1, 0);
             }
         }
-        // 項目軸の目盛線: 項目の境 (midCat なら項目の位置) ごとの線 (Excel の印刷 exp79)
+        // 項目軸の目盛線: 項目の境 (midCat なら項目の位置) ごとの線
         if (!scatter && catAx.gridMajor && d3x == 0) {
             DrawingPainter.LineStyle cg = dp.line(catAx.gridSpPr == null ? null : Xml.child(catAx.gridSpPr, "ln"), null, null);
             if (cg == null && (catAx.gridSpPr == null || Xml.child(catAx.gridSpPr, "ln") == null)) cg = gridDefault();
@@ -1605,7 +1605,7 @@ public final class ChartPainter {
             }
             if (gg.type.equals("line")) paintLineExtras(cv, gg, va, plot, nCats);
         }
-        // 系列を奥に並べる斜投影の 3D: 系列名を床の右の縁に沿って奥へ並べる。重なるなら一つおき (Excel の印刷 exp72 の円柱: A と D)
+        // 系列を奥に並べる斜投影の 3D: 系列名を床の右の縁に沿って奥へ並べる。重なるなら一つおき (A と D)
         if (ribbon && !horiz && d3x > 0) {
             Axis sa = null;
             for (Axis a : axes) if (a.kind.equals("serAx") && (g.axIds.isEmpty() || g.axIds.contains(a.id))) sa = a;
@@ -1697,7 +1697,7 @@ public final class ChartPainter {
             TStyle tt = titleSize(axisTitleStyle(leftTitleAx));
             String s = axisTitleText(leftTitleAx);
             if (!s.isEmpty() && horizontalTitle(leftTitleAx)) {
-                text(cv, s, box.getX() + H_TITLE_X, plot.getCenterY(), tt, -1, 0); // 横書きの縦の軸のタイトル (exp89)
+                text(cv, s, box.getX() + H_TITLE_X, plot.getCenterY(), tt, -1, 0); // 横書きの縦の軸のタイトル
             } else if (!s.isEmpty()) {
                 cv.save();
                 java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(box.getX() + lineH(tt) / 2, plot.getCenterY());
@@ -1744,7 +1744,7 @@ public final class ChartPainter {
 
     /** 横の軸のタイトルの、プロットの下の場所の追加 (タイトルの行の高さに足す) と、枠の下端から基線までの距離 (pt)。 */
     static final double AXIS_TITLE_GAP = 6, AXIS_TITLE_BOTTOM = 4;
-    /** 横書きの縦の軸のタイトル: 左端からの位置と、タイトルの幅に足す場所 (pt。Excel の印刷 exp89)。 */
+    /** 横書きの縦の軸のタイトル: 左端からの位置と、タイトルの幅に足す場所 (pt)。 */
     static final double H_TITLE_X = 4.8, H_TITLE_GAP = 11;
     static final double H_PLOT_TOP = 0.6;
 
@@ -1850,13 +1850,13 @@ public final class ChartPainter {
         return sb.toString();
     }
 
-    /** 斜めの項目名の右上の角の、目盛りからの横のずれ (pt。exp125 の 6 件で最良) */
+    /** 斜めの項目名の右上の角の、目盛りからの横のずれ (pt) */
     static final double CR_DX = -4;
     /** 項目名を斜め (-45 度) に描く (catLabelHeight で決める)。 */
     private boolean catRot;
 
     /**
-     * 項目名を斜めにするか (Excel の印刷 exp125): どれかが項目の幅に収まらず、しかも空白で区切った語のどれかが幅を超える
+     * 項目名を斜めにするか: どれかが項目の幅に収まらず、しかも空白で区切った語のどれかが幅を超える
      * (和文の続いた文字列は 1 語。語の途中では折り返さない)。語が幅に収まれば空白で折り返す。
      */
     private boolean catRotate(List<String> cats, TStyle t, double slot) {
@@ -1885,7 +1885,7 @@ public final class ChartPainter {
     }
 
     /**
-     * 文字に使う書体で決まる行の高さ (Excel の印刷 exp72): 和文を含めば和文の行 (lineH + 0.464em)、欧文だけなら欧文の書体の
+     * 文字に使う書体で決まる行の高さ: 和文を含めば和文の行 (lineH + 0.464em)、欧文だけなら欧文の書体の
      * アセント + ディセント。
      */
     private double textLineH(TStyle t, Iterable<String> texts) {
@@ -1899,7 +1899,7 @@ public final class ChartPainter {
     private void paintCatLabel(PdfCanvas cv, String lab, double cx, double y, double slot, TStyle t) throws IOException {
         double w = textWidth(lab, t);
         if (catRot) {
-            // 斜めの項目名: 文字の右上の角を目盛りの位置に置き、左下へ向けて 45 度で描く (exp125)
+            // 斜めの項目名: 文字の右上の角を目盛りの位置に置き、左下へ向けて 45 度で描く
             cv.save();
             java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(cx + CR_DX, y);
             at.rotate(-Math.PI / 4);
@@ -1916,7 +1916,7 @@ public final class ChartPainter {
         TextLayout.Run run = new TextLayout.Run(lab, t.spec(), t.size, t.color);
         List<TextLayout.Line> lines = TextLayout.layout(List.of(run), (float) Math.max(slot, t.size), true, false, ctx.fonts);
         double yy = y;
-        // 行の間隔は場所の計算 (catLabelHeight) と同じ textLineH (欧文 9pt で 11.0pt。Excel の印刷 exp81)
+        // 行の間隔は場所の計算 (catLabelHeight) と同じ textLineH (欧文 9pt で 11.0pt)
         double pitch = modern() ? textLineH(t, List.of(lab)) : -1;
         for (TextLayout.Line l : lines) {
             TextLayout.drawLine(cv, l, cx - l.width / 2, yy + l.ascent, 0, 0);
@@ -1941,7 +1941,7 @@ public final class ChartPainter {
     private Element dTable;
     /** データテーブルの行の上下の余白の合計 (pt)。 */
     static final double DT_PAD = 2.75;
-    /** データテーブルの左端のグラフの内側からの余白、凡例の印の幅 (四角・線) (pt)。Excel の印刷 exp72。 */
+    /** データテーブルの左端のグラフの内側からの余白、凡例の印の幅 (四角・線) (pt)。 */
     static final double DT_BOTTOM = 1.5, DT_INSET = 9.5, DT_KEY_BOX = 7, DT_KEY_LINE = 21;
 
     /** 系列が線の凡例の印を使う (折れ線・散布図の線・レーダー)。 */
@@ -2033,10 +2033,10 @@ public final class ChartPainter {
     private Double hPercent;
     /** 3D の縦棒の奥行きの向きと長さ (pt。2D なら 0)。 */
     private double d3x, d3y;
-    /** 描いているグループが 3D (2D の配置の規則 (exp81) を当てない)。 */
+    /** 描いているグループが 3D。 */
     private boolean flat3D;
 
-    /** 2D の書式のあるグラフの配置の規則 (Excel の印刷 exp81) を当てる。旧来のスタイルと 3D は従来のまま。 */
+    /** 2D の書式のあるグラフの配置の規則 を当てる。旧来のスタイルと 3D は従来のまま。 */
     private boolean modern() {
         return !legacy && !flat3D;
     }
@@ -2089,7 +2089,7 @@ public final class ChartPainter {
         double[][] ends = new double[g.series.size()][n];
         for (int si = 0; si < g.series.size(); si++) {
             Series s = g.series.get(si);
-            if (d3x > 0 && noFill(s)) continue; // 3D の塗りなしの系列は描かない (Excel の印刷 exp73)
+            if (d3x > 0 && noFill(s)) continue; // 3D の塗りなしの系列は描かない
             DrawingPainter.LineStyle ls = s.spPr == null ? null : dp.line(Xml.child(s.spPr, "ln"), null, null);
             double[] centers = new double[n];
             for (int i = 0; i < n && i < s.vals.size(); i++) {
@@ -2131,7 +2131,7 @@ public final class ChartPainter {
                         for (Element f : Xml.children(ex, "invertSolidFillFmt")) inv = Xml.child(f, "spPr");
                     Color ic = inv != null && DrawingPainter.fillElement(inv) != null ? dp.paint(DrawingPainter.fillElement(inv), null, null).color : null;
                     p = solid(ic != null ? ic : Color.WHITE);
-                    invOutline = ic == null; // 色の指定がなければ白で塗り、黒の 0.75pt の枠を描く (Excel の印刷 exp72)
+                    invOutline = ic == null; // 色の指定がなければ白で塗り、黒の 0.75pt の枠を描く
                 }
                 if (d3x > 0) {
                     // 3D の箱: 系列の奥行き (gapDepth で決まる) の中ほどに置き、上面と右の面は暗くする
@@ -2300,13 +2300,13 @@ public final class ChartPainter {
                     if (pt == null) continue;
                     if (!started) { p.moveTo(pt[0], pt[1]); started = true; } else p.lineTo(pt[0], pt[1]);
                 }
-                if (!started) continue;   // 値のない系列 (rand30 rd30)
+                if (!started) continue;   // 値のない系列
                 for (int i = n - 1; i >= 0; i--) if (base[i] != null) p.lineTo(base[i][0], base[i][1]);
                 p.closePath();
                 DrawingPainter.Paint fill = !dp.bw && s.spPr != null && DrawingPainter.fillElement(s.spPr) != null
                         ? dp.paint(DrawingPainter.fillElement(s.spPr), null, null) : bwFill(s.color);
                 dp.fillShape(cv, p, fill, null);
-                // 白黒印刷の面は、黒・白・灰色の塗りに黒の枠 (Excel の印刷 exp124 bw_area)
+                // 白黒印刷の面は、黒・白・灰色の塗りに黒の枠
                 DrawingPainter.LineStyle ls = dp.bw ? defaultLine(Color.BLACK, BW_AREA_LINE) : s.spPr == null ? null : dp.line(Xml.child(s.spPr, "ln"), null, null);
                 if (ls != null) dp.strokeShape(cv, p, ls);
             } else {
@@ -2569,7 +2569,7 @@ public final class ChartPainter {
             double ex = xpx.applyAsDouble(xmax), ey = f == null ? plot.getY() : valPos(ya, f.applyAsDouble(xmax), plot, false);
             if (modern()) {
                 // 各行を中央に揃え、全体の右端を終点の 9.4pt 左、1 行目の基線を終点の 2.75pt 上に置く。行の間隔は textLineH
-                // (Excel の印刷 exp72 の trend_linear: 9pt で 11.0pt)
+                // (9pt で 11.0pt)
                 double pitch = textLineH(ts, lines), mw = 0;
                 for (String l : lines) mw = Math.max(mw, textWidth(l, ts));
                 double cx = Math.min(ex, plot.getMaxX()) - TREND_LBL_DX - mw / 2;
@@ -2913,7 +2913,7 @@ public final class ChartPainter {
 
         /**
          * 視点の距離を紙の上の pt (eyePt) で決めて、矩形に収める。距離は縮尺に対して一定なので、縮尺と交互に求める
-         * (Excel の実測 exp66: 視点の距離 = プロットの高さ / 2 ÷ tan(perspective / 4 度)、縮尺によらず一定)。
+         * (視点の距離 = プロットの高さ / 2 ÷ tan(perspective / 4 度)、縮尺によらず一定)。
          */
         void fitEyePt(Rectangle2D r, double eyePt) {
             if (Double.isInfinite(eye)) { for (int i = 0; i < 30; i++) fit(r); return; }
@@ -2965,44 +2965,29 @@ public final class ChartPainter {
         double depth(double x, double y, double z) { return view(x, y, z)[2]; }
     }
 
-    /** 奥行き = 項目の幅 × DEPTH_K × depthPercent (exp66: 項目 4 つ、depth 100% で幅の 0.25、300% で 0.73)。 */
+    /** 奥行き = 項目の幅 × DEPTH_K × depthPercent (項目 4 つ、depth 100% で幅の 0.25、300% で 0.73)。 */
     static final double DEPTH_K = 1.0;
     /** 遠近の 3D のプロットの余白 (左、右、上、下。グラフの内側の枠 (外から 7pt) からの pt)。 */
     static final double[] PERSP_INSET = {4.8, 6.6, 6.3, 7.5};
     /** 遠近の 3D の値の軸の目盛りの最小の間隔 (文字の大きさに対する倍率)。 */
     static final double PERSP_VGAP = 1.45;
-    /** 自動の高さの補正 (系列を奥に並べないもの。Excel の印刷 exp66〜69: 1.015 倍)。 */
+    /** 自動の高さの補正 (系列を奥に並べないもの。1.015 倍)。 */
     static final double PERSP_AUTO_H = 1.015;
     /** 系列を奥に並べるラベルのない 3D で、収めるときに横の壁と床の外側に足す厚み (紙の上の pt)。 */
     static final double PERSP_HIDDEN_WALL = 4;
-    /** 奥の壁の外側に足す厚み (紙の上の pt) = この値 × (sin |rotY| − sin 20°)。既定の 20° では 0 (Excel の印刷 exp66 の rot60・mix、exp67 の rot50)。 */
+    /** 奥の壁の外側に足す厚み (紙の上の pt) = この値 × (sin |rotY| − sin 20°)。既定の 20° では 0。 */
     static final double PERSP_BACK_WALL = 23;
     /** 遠近が既定の 30 より強いときの視点の距離の倍率。 */
     static final double PERSP_WIDE_EYE = 0.92;
-    /** 遠近の 3D の系列名を一つおきにする間隔の閾値 (行の高さの倍率)。 */
-    static final double PERSP_SER_SKIP = 2.5;
 
     /** 軸の目盛ラベルを表示するか。 */
     private static boolean shown(Axis a) {
         return a != null && !a.deleted && !"none".equals(a.tickLblPos);
     }
 
-    /** 系列の軸のラベルを表示するか (系列を奥に並べる 3D)。 */
-    private static boolean serLabels(Group g, List<Axis> axes) {
-        for (Axis a : axes) if (a.kind.equals("serAx") && (g.axIds.isEmpty() || g.axIds.contains(a.id)) && !a.deleted && !"none".equals(a.tickLblPos)) return true;
-        return false;
-    }
-
-    /** 四角形 A-B-C-E を中心の点 (4 つの平均) で 4 つの三角形に分ける。 */
-    private static double[][][] centerTris(double[] A, double[] B, double[] C, double[] E) {
-        double[] M = new double[4];
-        for (int j = 0; j < 4; j++) M[j] = (A[j] + B[j] + C[j] + E[j]) / 4;
-        return new double[][][] {{A, B, M}, {B, C, M}, {C, E, M}, {E, A, M}};
-    }
-
     /** 上から見た図の区間の数の上限 (autoScale の長さ ÷ 間隔)。 */
     static final double TOP_VIEW_BANDS = 4.5;
-    /** 上から見たワイヤーフレームの線の太さ (Excel は画像で 1 画素ほど。exp72)。 */
+    /** 上から見たワイヤーフレームの線の太さ (Excel は画像で 1 画素ほど)。 */
     static final double TOP_WIRE_W = 0.25;
 
     /** 上から見た図 (rotX 90 の等高線) か。 */
@@ -3011,7 +2996,7 @@ public final class ChartPainter {
     }
 
     /**
-     * 自動の高さの倍率 (Excel の実測 exp68〜70。系列を奥に並べないもの・横棒は 1)。縦棒は系列 2・3 で 0.75、4 で 1、
+     * 自動の高さの倍率 (系列を奥に並べないもの・横棒は 1)。縦棒は系列 2・3 で 0.75、4 で 1、
      * 折れ線は 0.75、面・等高線は系列 2 で 0.5、3 以上で 0.75。
      */
     private double autoHeightFactor(Group g, boolean byDepth, boolean surface, int ns) {
@@ -3039,12 +3024,6 @@ public final class ChartPainter {
             double[] p0 = lerp3(a, b, t0), p1 = lerp3(a, b, t1), pm = lerp3(a, b, tm);
             faces.add(new Face3(List.of(p0, p1), autoColor(band), P.depth(pm[0], pm[1], pm[2]), true));
         }
-    }
-
-    /** ワイヤーフレームの線分 a-b。 */
-    private void wireLine(List<Face3> faces, Proj P, double[] a, double[] b, Color c) {
-        double[] m = lerp3(a, b, 0.5);
-        faces.add(new Face3(List.of(new double[] {a[0], a[1], a[2]}, new double[] {b[0], b[1], b[2]}), wireColor(c), P.depth(m[0], m[1], m[2]), true));
     }
 
     /** ワイヤーフレームの三角形の中の、区間の境の値の等値線 (下の区間の色)。 */
@@ -3106,10 +3085,10 @@ public final class ChartPainter {
         // 奥行き: 系列を並べるものは (項目の幅 × 系列の数)、それ以外は項目の幅 (depthPercent を掛ける)
         double slot = 1.0 / n;
         // 奥行きは項目の幅に比例する (横棒は項目が縦に並ぶので、高さに比例する)
-        // 系列を奥に並べるもの: 系列の数 × 項目の幅。集合縦棒: 棒の幅 × (1 + 間隔) (exp68: 系列 2・項目 4 で 0.182)
+        // 系列を奥に並べるもの: 系列の数 × 項目の幅。集合縦棒: 棒の幅 × (1 + 間隔) (系列 2・項目 4 で 0.182)
         double gapW = g.type.equals("bar") ? g.gapWidth / 100 : 1.5;
-        // 横棒も同じ (項目の幅は高さの向きに測るので、あとで高さを掛ける。exp69)
-        // ラベルのある 3D の等高線は奥行きを 0.92 倍 (Excel の印刷 exp72 の surf3d・surf_wire。ラベルのないもの (exp69・70) は 1)
+        // 横棒も同じ (項目の幅は高さの向きに測るので、あとで高さを掛ける)
+        // ラベルのある 3D の等高線は奥行きを 0.92 倍
         boolean anyLabel = shown(valAx) || shown(catAx) || shown(serAx);
         double depthK = byDepth ? slot * ns * DEPTH_K * depthPct / 100 * (surface && rotX < 89.5 && anyLabel ? 0.92 : 1)
                 : (stacked ? slot / (1 + gapW) : slot / (ns + gapW)) * (1 + gapW) * depthPct / 100;
@@ -3131,14 +3110,14 @@ public final class ChartPainter {
         if (catVis && s0 != null) for (String c : s0.cats) cw = Math.max(cw, textWidth(c, ct));
         double sw = 0;
         if (serVis) for (Series s : g.series) sw = Math.max(sw, textWidth(s.name, st));
-        double left = horiz ? (catVis ? cw + 6 : 0) : (valVis ? mw + (surface ? 10 : 6) : 0); // 等高線は値のラベルの右に 10pt (exp72)
+        double left = horiz ? (catVis ? cw + 6 : 0) : (valVis ? mw + (surface ? 10 : 6) : 0); // 等高線は値のラベルの右に 10pt
         double bottom = horiz ? (valVis ? lineH(vt) + 5 : 0) : (catVis ? lineH(ct) + 5 : 0);
-        double right = serVis ? sw * 1.5 - 4 : 0; // 系列名の右の場所 (Excel の印刷 exp72 の等高線・exp50)
-        // 余白 (グラフの内側の枠から。ラベルの場所と大きい方): exp66・exp67 の実測に合わせた値
+        double right = serVis ? sw * 1.5 - 4 : 0; // 系列名の右の場所
+        // 余白 (グラフの内側の枠から。ラベルの場所と大きい方)
         left = Math.max(left, PERSP_INSET[0]); right = Math.max(right, PERSP_INSET[1]); bottom = Math.max(bottom, PERSP_INSET[3]);
-        // 和文の題名の行の増分は、3D の等高線では空けない (Excel の印刷 exp72。縦棒などの遠近の 3D (exp50・52) と上から見た図は空ける)
+        // 和文の題名の行の増分は、3D の等高線では空けない
         double tx = topView || !surface ? 0 : titleExtra;
-        // ラベルのある 3D の等高線は 1.5pt 下 (Excel の印刷 exp72 の surf3d・surf_wire)
+        // ラベルのある 3D の等高線は 1.5pt 下
         double sdy = surface && !topView && (valVis || catVis || serVis) ? 1.5 : 0;
         Rectangle2D plot = new Rectangle2D.Double(box.getX() + left, box.getY() + PERSP_INSET[2] - tx + sdy, Math.max(10, box.getWidth() - left - right),
                 Math.max(10, box.getHeight() - bottom - PERSP_INSET[2] + tx));
@@ -3147,26 +3126,26 @@ public final class ChartPainter {
         if (hPercent != null) pj = new Proj(rotX, rotY, perspective, hPercent / 100, depthOf.applyAsDouble(hPercent / 100));
         else if (topView) {
             // 上から見た図: 横 : 縦 = 項目の数 : 系列の数 の長方形を、プロットに収まる最大で中央に置く
-            // (Excel の印刷 exp72 の 4×4 は正方形、exp52 chartmisc2 の 5×3 は 5:3)
+            // (3)
             double ratio = (double) Math.max(1, n) / Math.max(1, ns);
             double tw = Math.min(plot.getWidth(), plot.getHeight() * ratio), th = tw / ratio;
             plot = new Rectangle2D.Double(plot.getCenterX() - tw / 2, plot.getCenterY() - th / 2, tw, th);
             pj = new Proj(rotX, rotY, 0, 0.3, 1 / ratio);
         } else {
-            // 自動の高さ: 箱の高さ ÷ 幅 = プロットの高さ ÷ 幅 × 倍率 (exp66: 360×270 の枠で 0.709 = 237.5 / 335。回転・遠近によらない。
-            // 横棒も同じ (exp69))。倍率は系列を奥に並べるものの実測 (exp68〜70)
+            // 自動の高さ: 箱の高さ ÷ 幅 = プロットの高さ ÷ 幅 × 倍率 (360×270 の枠で 0.709 = 237.5 / 335。回転・遠近によらない。
+            // 横棒も同じ)。倍率は系列を奥に並べるものの実測
             double hh = plot.getHeight() / plot.getWidth() * autoHeightFactor(g, byDepth, surface, ns) * (byDepth && ns > 1 ? 1 : PERSP_AUTO_H);
             pj = new Proj(rotX, rotY, perspective, hh, depthOf.applyAsDouble(hh));
         }
         if (!topView) {
             // 系列を奥に並べ、軸のラベルがないときは、横の壁と床の外側に 4pt の厚みがあるものとして収める
-            // (Excel の印刷 exp68〜70。棒の系列 4 以上は除く。ラベルがあるとき (exp50・52・72) は足さない)
+            // (棒の系列 4 以上は除く)
             boolean dep = byDepth && ns > 1 && !valVis && !catVis && !serVis && !(g.type.equals("bar") && ns >= 4);
             boolean depL = byDepth && ns > 1 && !dep && !surface;
-            // ラベルのある、系列を奥に並べる棒・折れ線・面は、横の壁だけ 3pt (Excel の印刷 exp52)
+            // ラベルのある、系列を奥に並べる棒・折れ線・面は、横の壁だけ 3pt
             pj.thx = dep ? PERSP_HIDDEN_WALL : depL ? 3 : 0; pj.thy = dep ? PERSP_HIDDEN_WALL : 0; pj.thz = PERSP_BACK_WALL * Math.max(0, Math.sin(Math.toRadians(Math.abs(rotY))) - Math.sin(Math.toRadians(20)));
         }
-        if (!topView && perspective > 0) pj.fitEyePt(plot, plot.getHeight() / 2 / Math.tan(Math.toRadians(perspective / 4)) * (perspective > 30 ? PERSP_WIDE_EYE : 1)); // 既定 (30) より遠近が強いと視点は 0.92 倍 (exp66 の persp80・mix)
+        if (!topView && perspective > 0) pj.fitEyePt(plot, plot.getHeight() / 2 / Math.tan(Math.toRadians(perspective / 4)) * (perspective > 30 ? PERSP_WIDE_EYE : 1)); // 既定 (30) より遠近が強いと視点は 0.92 倍
         else if (!topView) pj.fitEyePt(plot, Double.POSITIVE_INFINITY);
         else pj.fit(plot);
         final Proj P = pj;
@@ -3174,8 +3153,8 @@ public final class ChartPainter {
         // 値の軸の目盛り: 投影した値の軸の長さで決める
         double[] a0 = horiz ? P.p(0, 0, 0) : P.p(0, 0, 0), a1 = horiz ? P.p(W, 0, 0) : P.p(0, H, 0);
         double axLen = Math.hypot(a1[0] - a0[0], a1[1] - a0[1]);
-        // 目盛りの最小の間隔: 遠近の 3D の縦の値の軸は文字の大きさの PERSP_VGAP 倍 (exp52 chart3d2: 間 12.4pt の 2 刻みは使わない。exp50 chart3d の面: 間 17.3pt の 5 刻みは使う)
-        // 上から見た図は、区間が 4 つ以下になる最小の刻み (Excel の印刷 exp72: 10〜60 は 20 刻み、exp52: 2〜11 は 5 刻み)
+        // 目盛りの最小の間隔: 遠近の 3D の縦の値の軸は文字の大きさの PERSP_VGAP 倍 (間 12.4pt の 2 刻みは使わない。間 17.3pt の 5 刻みは使う)
+        // 上から見た図は、区間が 4 つ以下になる最小の刻み
         if (topView) autoScale(valAx, dmin, dmax, TOP_VIEW_BANDS, 1);
         else autoScale(valAx, dmin, dmax, axLen, horiz ? 36 : vt.size * PERSP_VGAP);
         java.util.function.DoubleUnaryOperator vf = v -> {
@@ -3190,7 +3169,7 @@ public final class ChartPainter {
         double wx = leftWall ? 0 : W;
         // 壁と床の塗り (backWall・sideWall・floor の spPr の塗り。厚みは描かない)
         if (!topView) {
-            // 横棒は床が左 (値の軸の 0 の面)、横の壁が下 (exp69)
+            // 横棒は床が左 (値の軸の 0 の面)、横の壁が下
             List<double[]> bottomQ = List.of(v3(0, 0, 0), v3(W, 0, 0), v3(W, 0, D), v3(0, 0, D));
             List<double[]> sideQ = List.of(v3(wx, 0, 0), v3(wx, 0, D), v3(wx, H, D), v3(wx, H, 0));
             wallFill(cv, P, "floor", horiz ? sideQ : bottomQ);
@@ -3211,7 +3190,7 @@ public final class ChartPainter {
             if (valVis) {
                 String lab = axisLabel(valAx, v, srcFmt);
                 if (horiz) { double[] q = P.p(f * W, 0, 0); text(cv, lab, q[0], q[1] + 3, vt, 0, -1); }
-                else { double[] q = P.p(wx, f * H, 0); text(cv, lab, Math.min(q[0], P.p(0, f * H, 0)[0]) - 4 - (surface ? 5 : 0), q[1] + (surface ? 2 : 0), vt, 1, 0); } // 等高線の値のラベルは 5pt 左・2pt 下 (exp72)
+                else { double[] q = P.p(wx, f * H, 0); text(cv, lab, Math.min(q[0], P.p(0, f * H, 0)[0]) - 4 - (surface ? 5 : 0), q[1] + (surface ? 2 : 0), vt, 1, 0); } // 等高線の値のラベルは 5pt 左・2pt 下
             }
         }
         // 床の縁 (項目の軸と系列の軸の線)
@@ -3229,10 +3208,10 @@ public final class ChartPainter {
             }
         }
         if (serVis) {
-            // 隣の系列名との縦の間隔が行の高さ × 2.5 より狭ければ一つおき (Excel の印刷 exp52 の 3D 折れ線・等高線: 系列 1 と 3)
+            // 隣の系列名との縦の間隔が行の高さ × 2.5 より狭ければ一つおき (系列 1 と 3)
             int every = 1;
             if (ns > 1) {
-                // 隣の系列名の文字の枠が重なるなら、重ならなくなるまで間を空ける (Excel の印刷 exp52: 系列 1 と 3、exp88: 2 系列は両方)
+                // 隣の系列名の文字の枠が重なるなら、重ならなくなるまで間を空ける
                 double z0 = surface ? 0 : D * 0.5 / ns, z1 = surface ? D / (ns - 1) : D * 1.5 / ns;
                 double[] q0 = P.p(leftWall ? W : 0, 0, z0), q1 = P.p(leftWall ? W : 0, 0, z1);
                 double dx = Math.abs(q1[0] - q0[0]), dy = Math.abs(q1[1] - q0[1]), lh = lineH(st);
@@ -3286,7 +3265,7 @@ public final class ChartPainter {
                     double[] A = {x0, vf.applyAsDouble(q00) * H, zk.applyAsDouble(k), q00}, B = {x1, vf.applyAsDouble(q10) * H, zk.applyAsDouble(k), q10},
                             C = {x1, vf.applyAsDouble(q11) * H, zk.applyAsDouble(k + 1), q11}, E = {x0, vf.applyAsDouble(q01) * H, zk.applyAsDouble(k + 1), q01};
                     if (g.wireframe && !topView) {
-                        // 3D のワイヤーフレーム (exp72): 格子の線を区間の境で切って区間の色で描き、等値線を足す (色は薄めない)
+                        // 3D のワイヤーフレーム: 格子の線を区間の境で切って区間の色で描き、等値線を足す (色は薄めない)
                         wireBand(faces, P, A, B, valAx);
                         wireBand(faces, P, A, E, valAx);
                         if (i + 2 == n) wireBand(faces, P, B, C, valAx);
@@ -3295,7 +3274,7 @@ public final class ChartPainter {
                         continue;
                     }
                     if (g.wireframe && topView) {
-                        // ワイヤーフレーム (Excel の印刷 exp72 の埋め込み画像で確認): 格子の線は区間の境で切って区間の色、
+                        // ワイヤーフレーム: 格子の線は区間の境で切って区間の色、
                         // 区間の境の値の等値線は下の区間の色 (どちらも薄めない)。対角線は描かない。左と奥の縁は灰色の線を重ねる
                         wireBand(faces, P, A, B, valAx);
                         wireBand(faces, P, A, E, valAx);
@@ -3304,7 +3283,7 @@ public final class ChartPainter {
                         for (double[][] tri : new double[][][] {{A, B, E}, {B, C, E}}) wireIso(faces, P, tri, valAx, false);
                         continue;
                     }
-                    // 四角形は B-E の対角線で 2 つの三角形に分ける (Excel の印刷 exp72: 区間の境が直線につながる)
+                    // 四角形は B-E の対角線で 2 つの三角形に分ける (区間の境が直線につながる)
                     double[][][] tris = new double[][][] {{A, B, E}, {B, C, E}};
                     for (double[][] tri : tris) {
                         double[] nrm = normal(tri[0], tri[1], tri[2]);
@@ -3328,7 +3307,7 @@ public final class ChartPainter {
             boolean area = g.type.equals("area");
             for (int k = 0; k < g.series.size(); k++) {
                 Series s = g.series.get(k);
-                if (noFill(s) && (area || lineNone(s))) continue; // 塗りなし (折れ線は線もなし) の系列は描かない (Excel の印刷 exp68)
+                if (noFill(s) && (area || lineNone(s))) continue; // 塗りなし (折れ線は線もなし) の系列は描かない
                 Color c = s.color;
                 if (s.spPr != null && DrawingPainter.fillElement(s.spPr) != null) {
                     DrawingPainter.Paint pp = dp.paint(DrawingPainter.fillElement(s.spPr), null, null);
@@ -3390,7 +3369,7 @@ public final class ChartPainter {
             }
         }
         if (surface && g.wireframe && topView) {
-            // 上から見たワイヤーフレームの左の縁と奥の縁に灰色の線 (Excel の印刷 exp72)
+            // 上から見たワイヤーフレームの左の縁と奥の縁に灰色の線
             Color gc = new Color(0xD9D9D9);
             seg(cv, P, v3(0, 0, 0), v3(0, 0, D), defaultLine(gc, 0.75));
             seg(cv, P, v3(0, 0, D), v3(W, 0, D), defaultLine(gc, 0.75));
@@ -3399,12 +3378,12 @@ public final class ChartPainter {
 
     /** 3D の箱の見える面を加える (奥行きは箱の中心)。 */
     /** 3D の壁・床 (name) の塗りを、投影した面 pts に塗る。塗りがなければ何もしない。 */
-    /** 等高線のワイヤーフレームの線の色: 区間の色を白と半々に混ぜた薄い色 (Excel の印刷 exp72)。 */
+    /** 等高線のワイヤーフレームの線の色: 区間の色を白と半々に混ぜた薄い色。 */
     static Color wireColor(Color c) {
         return new Color((c.getRed() + 255) / 2, (c.getGreen() + 255) / 2, (c.getBlue() + 255) / 2);
     }
 
-    /** 直交軸の 3D の横の壁と床の暗さ (Excel の印刷 exp73: 純色が 0.63 倍・0.75 倍)。 */
+    /** 直交軸の 3D の横の壁と床の暗さ (純色が 0.63 倍・0.75 倍)。 */
     static final double OBLIQUE_SIDE_SHADE = 0.63, OBLIQUE_FLOOR_SHADE = 0.75;
     /** 直交軸の 3D の外側の余白の最小 (左・右・上・下、pt)。 */
     static final double[] OBLIQUE_INSET = {4.8, 8.5, 6.5, 6.2};
@@ -3427,7 +3406,7 @@ public final class ChartPainter {
         if (fe == null || "noFill".equals(fe.getLocalName())) return;
         DrawingPainter.Paint pt = dp.paint(fe, null, null);
         if (pt == null || pt.color == null) return;
-        // 横の壁は 0.64 倍、床は 0.757 倍に暗くする (Excel の印刷 exp66: 緑 → #00A300、青 → #0000C1)
+        // 横の壁は 0.64 倍、床は 0.757 倍に暗くする (緑 → #00A300、青 → #0000C1)
         double k = name.equals("sideWall") ? PERSP_SIDE_SHADE : name.equals("floor") ? PERSP_FLOOR_SHADE : 1;
         cv.fill(P.path(pts), dp.bw ? Color.WHITE : k == 1 ? pt.color : shade(pt.color, k));
     }
@@ -3536,7 +3515,7 @@ public final class ChartPainter {
         double max = 0;
         for (Group gg : List.of(g)) for (Series ss : gg.series) for (Double z : ss.sizes) if (z != null) max = Math.max(max, Math.abs(z));
         if (max <= 0) return;
-        // 最大のバブルの直径 = プロットの短い辺 × 1.13 × s / (s + 340) (s は倍率 %。Excel の印刷 exp71: 50% で 0.143、100% で 0.255、200% で 0.41)
+        // 最大のバブルの直径 = プロットの短い辺 × 1.13 × s / (s + 340) (s は倍率 %。50% で 0.143、100% で 0.255、200% で 0.41)
         double sc = Math.max(0, g.bubbleScale);
         double maxD = Math.min(plot.getWidth(), plot.getHeight()) * BUBBLE_A * sc / (sc + BUBBLE_K);
         DrawingPainter.Paint fill = s.spPr != null && DrawingPainter.fillElement(s.spPr) != null ? dp.paint(DrawingPainter.fillElement(s.spPr), null, null) : solid(s.color);
@@ -3777,7 +3756,7 @@ public final class ChartPainter {
         double total = 0;
         for (Double v : s.vals) if (v != null && v > 0) total += v;
         if (total <= 0) return;
-        // 旧来のスタイルは短い辺の 0.97 倍 (exp75 の実測)、それ以外は短い辺 − 7pt (exp81 の実測: 短い辺 149pt で 140pt、85pt で 77pt)
+        // 旧来のスタイルは短い辺の 0.97 倍、それ以外は短い辺 − 7pt (短い辺 149pt で 140pt、85pt で 77pt)
         double side = Math.min(box.getWidth(), box.getHeight());
         double d = legacy ? side * LEGACY_PIE : Math.max(side * 0.5, side - PIE_INSET);
         // データラベルを最適な位置・外側に置く円は、ラベルの場所を空けて小さくする (Excel の印刷の実測 2 件: 0.84 倍)
@@ -3825,16 +3804,16 @@ public final class ChartPainter {
 
     /**
      * 縦の値の軸のラベルの右端とプロットの間 (pt)。書式のあるグラフは文字の大きさ × 0.91 で、ラベルの左端はグラフの内側の左端の 0.96pt 外
-     * (Excel の印刷 exp81: 9pt で 8.2pt、12pt で 10.9pt)。旧来のスタイルは 4pt で、ラベルの左に 2pt の余白。
+     * (9pt で 8.2pt、12pt で 10.9pt)。旧来のスタイルは 4pt で、ラベルの左に 2pt の余白。
      */
     private double valLabelGap(TStyle vt) {
         return !modern() ? 4 : vt.size * VAL_GAP_EM;
     }
 
     static final double VAL_GAP_EM = 0.91;
-    /** 書式のあるグラフの値のラベルは、グラフの内側の左端 (外から 7pt) より 0.96pt 外から始まる (Excel の印刷 exp81)。 */
+    /** 書式のあるグラフの値のラベルは、グラフの内側の左端 (外から 7pt) より 0.96pt 外から始まる。 */
     static final double VAL_LABEL_OUT = 0.96;
-    /** 項目軸がプロットの途中で交わるときの、プロットの下の場所 (文字の大きさに対する比。Excel の印刷 exp81)。 */
+    /** 項目軸がプロットの途中で交わるときの、プロットの下の場所 (文字の大きさに対する比)。 */
     static final double NEG_BOTTOM = 0.53;
     static final double LINE_LABEL_GAP = 8.2;
     static final double INSIDE_LEFT = 3.5;
@@ -3842,19 +3821,19 @@ public final class ChartPainter {
     static final double SEC_LABEL_EXTRA = 0.8, SEC_RIGHT_CUT = 3.1;
 
     /**
-     * 書式のあるグラフの下の項目名を、従来の位置から下げる量 (pt)。Excel の印刷 exp81: プロットの下端から基線までが
+     * 書式のあるグラフの下の項目名を、従来の位置から下げる量 (pt)。Excel はプロットの下端から基線までが
      * 欧文 9pt で 14.6pt、12pt で 19.2pt (従来は 13.5・16.8)、和文 9pt で 16.6pt。
      */
     private double catLabelDrop(TStyle t, List<String> cats) {
-        if (legacy) return hasCjk(cats) ? 1.5 : 0; // 旧来のスタイルの和文の項目名は 1.5pt 下 (Excel の印刷 exp90)
+        if (legacy) return hasCjk(cats) ? 1.5 : 0; // 旧来のスタイルの和文の項目名は 1.5pt 下
         if (!modern()) return 0;
         double d = 0.42 * t.size - 2.7;
         return hasCjk(cats) ? d + 0.22 * t.size : d;
     }
 
-    /** 書式のあるグラフの下の項目名の場所に足す量 (pt)。欧文は +1.3、和文は −1.5 (Excel の印刷 exp81)。 */
+    /** 書式のあるグラフの下の項目名の場所に足す量 (pt)。欧文は +1.3、和文は −1.5。 */
     private double catBottomExtra(TStyle t, List<String> cats) {
-        if (legacy) return hasCjk(cats) ? -4 : 0; // 旧来のスタイルの和文の項目名の場所は 4pt 少なく (exp90)
+        if (legacy) return hasCjk(cats) ? -4 : 0; // 旧来のスタイルの和文の項目名の場所は 4pt 少なく
         if (!modern()) return 0;
         return hasCjk(cats) ? -1.5 : 1.3;
     }
@@ -3864,13 +3843,13 @@ public final class ChartPainter {
         return false;
     }
 
-    /** 横の値の軸の目盛りの間隔の最小 (pt)。旧来のスタイルは 36、書式のあるグラフは 30 (Excel の印刷 exp81 の散布図: 32.8pt の間隔で目盛りを描く)。 */
+    /** 横の値の軸の目盛りの間隔の最小 (pt)。旧来のスタイルは 36、書式のあるグラフは 30 (32.8pt の間隔で目盛りを描く)。 */
     private double hGap() {
-        return legacy ? 30 : !modern() ? 36 : H_GAP; // 旧来のスタイルは 30 (Excel の印刷 exp90 の横棒)
+        return legacy ? 30 : !modern() ? 36 : H_GAP; // 旧来のスタイルは 30
     }
 
     static final double H_GAP = 30;
-    /** 散布図の x の目盛りを決める長さ = グラフの幅 − この値 (書式のあるグラフ。Excel の印刷 exp71・72・81)。 */
+    /** 散布図の x の目盛りを決める長さ = グラフの幅 − この値 (書式のあるグラフ)。 */
     static final double H_LEN_CUT = 20;
 
     /** 要素の切り離しの割合 (%): 要素の dPt の explosion、なければ系列の explosion。 */
@@ -3924,7 +3903,7 @@ public final class ChartPainter {
             Series s = g.series.get(si);
             Path2D p = new Path2D.Double();
             for (int i = 0; i <= n; i++) {
-                Double v = i % n < s.vals.size() ? s.vals.get(i % n) : null;   // 値の少ない系列 (rand30 rd22)
+                Double v = i % n < s.vals.size() ? s.vals.get(i % n) : null;   // 値の少ない系列
                 double rr = ((v == null ? 0 : v) - va.lo) / (va.hi - va.lo) * rad;
                 double a = Math.PI / 2 - 2 * Math.PI * i / n;
                 double x = cx + Math.cos(a) * rr, y = cy - Math.sin(a) * rr;
@@ -3954,8 +3933,8 @@ public final class ChartPainter {
             for (int i = 0; i < n; i++) {
                 double a = Math.PI / 2 - 2 * Math.PI * i / n, co = Math.cos(a), si = Math.sin(a);
                 String lab = i < cats.size() ? cats.get(i) : String.valueOf(i + 1);
-                // 真上・真下だけ上下に寄せ、斜めの項目名は上下の中央を線の先に合わせる (Excel の印刷 exp81)
-                int ha = co > 0.3 ? -1 : co < -0.3 ? 1 : 0, vaa = si > 0.95 ? 1 : si < -0.95 ? -1 : 0; // 7 項目の下 (sin -0.90) は中央 (exp75)
+                // 真上・真下だけ上下に寄せ、斜めの項目名は上下の中央を線の先に合わせる
+                int ha = co > 0.3 ? -1 : co < -0.3 ? 1 : 0, vaa = si > 0.95 ? 1 : si < -0.95 ? -1 : 0; // 7 項目の下 (sin -0.90) は中央
                 text(cv, lab, cx + co * (rad + 3), cy - si * (rad + 3), ct, ha, vaa);
             }
         }
@@ -4056,7 +4035,7 @@ public final class ChartPainter {
                 switch (pos) {
                     case "t" -> text(cv, line, x, y - 4, t, 0, 1);
                     case "b" -> text(cv, line, x, y + 4, t, 0, -1);
-                    // 左右は点から 5pt (書式のあるグラフは 8.2pt。Excel の印刷 exp81 のマーカー付き折れ線)
+                    // 左右は点から 5pt (書式のあるグラフは 8.2pt)
                     case "l" -> text(cv, line, x - (modern() ? LINE_LABEL_GAP : 5), y, t, 1, 0);
                     case "ctr" -> text(cv, line, x, y, t, 0, 0);
                     default -> text(cv, line, x + (modern() ? LINE_LABEL_GAP : 5), y, t, -1, 0);
@@ -4080,7 +4059,7 @@ public final class ChartPainter {
     }
 
     /** 書式のないグラフの縦の値の軸の目盛りの最小の間隔 (文字の大きさの倍。Excel の印刷: 10pt で 12.9pt 間隔の 1 刻み)。 */
-    static final double LEGACY_GAP = 1.35; // 1.25 では小さいグラフで細かすぎ (exp90)、1.5 では exp48 が粗すぎ
+    static final double LEGACY_GAP = 1.35;
 
     /** 引き出し線の、ラベルの手前の横の部分の長さ (pt)。 */
     private static final double LEADER_ELBOW = 5;

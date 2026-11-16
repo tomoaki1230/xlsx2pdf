@@ -81,13 +81,11 @@ public final class CondFormat {
             List<CfExt.X14Rule> x14 = CfExt.x14Rules(sheet);
             icons = IconSets.parse(sheet, x14);
             bars = DataBars.parse(sheet, x14, this::xmlColor);
-            if (X14_FMT) {
-                for (CfExt.X14Rule xr : x14) {
-                    String ty = xr.rule().getAttribute("type");
-                    if (!ty.equals("dataBar") && !ty.equals("iconSet") && !ty.equals("colorScale") && Xml.child(xr.rule(), "dxf") != null) x14fmt.add(xr);
-                }
-                x14fmt.sort(java.util.Comparator.comparingInt(xr -> Xml.intAttr(xr.rule(), "priority", Integer.MAX_VALUE)));
+            for (CfExt.X14Rule xr : x14) {
+                String ty = xr.rule().getAttribute("type");
+                if (!ty.equals("dataBar") && !ty.equals("iconSet") && !ty.equals("colorScale") && Xml.child(xr.rule(), "dxf") != null) x14fmt.add(xr);
             }
+            x14fmt.sort(java.util.Comparator.comparingInt(xr -> Xml.intAttr(xr.rule(), "priority", Integer.MAX_VALUE)));
         } catch (RuntimeException e) {
             Warnings.add("アイコンセット・データバーを読めませんでした", e);
         }
@@ -257,12 +255,9 @@ public final class CondFormat {
         return f != null && !f.isBlank();
     }
 
-    /** 拡張 (x14) の書式の規則を使うか。 */
-    static final boolean X14_FMT = !"0".equals(System.getProperty("x2p.x14fmt"));
-
     /**
      * 拡張 (x14:cfRule) の書式の規則をセルに適用する。ほかのシートを参照する数式の規則などは、Excel が拡張の側に保存する
-     * (夜間 n1367・n3839: 表紙!$E$9<>"✓" で全面を網掛けにする)。数式 (xm:f) は適用範囲を囲む範囲の左上を基準にずらして評価する。
+     * (表紙!$E$9<>"✓" で全面を網掛けにする)。数式 (xm:f) は適用範囲を囲む範囲の左上を基準にずらして評価する。
      * 種類が cellIs のものはセルの値と比べ、それ以外 (expression・containsText など) は 1 つ目の数式の真偽で判定する。
      * 通常の規則で決まった項目は上書きしない。
      */
@@ -396,9 +391,9 @@ public final class CondFormat {
                 hit = true;
             }
             PatternFormatting pf = rule.getPatternFormatting();
-            if (pf != null && res.fill == null && res.patBits == 0 && X14_FMT && pf.getFillPattern() > 1 && pf.getFillPattern() < CellPainter.PATTERN_NAMES.length
+            if (pf != null && res.fill == null && res.patBits == 0 && pf.getFillPattern() > 1 && pf.getFillPattern() < CellPainter.PATTERN_NAMES.length
                     && CellPainter.PATTERNS.get(CellPainter.PATTERN_NAMES[pf.getFillPattern()]) != null) {
-                // 網掛けの塗り (dxf の patternType が solid 以外): セルの網掛けと同じ模様で描く (夜間 n1367)
+                // 網掛けの塗り (dxf の patternType が solid 以外): セルの網掛けと同じ模様で描く
                 res.patBits = CellPainter.PATTERNS.get(CellPainter.PATTERN_NAMES[pf.getFillPattern()]);
                 Color fg = color(pf.getFillForegroundColorColor()), bg = color(pf.getFillBackgroundColorColor());
                 res.patFg = fg != null ? fg : Color.BLACK;
@@ -551,7 +546,7 @@ public final class CondFormat {
         if (val == null && th.getFormula() != null) {
             String f = th.getFormula().trim();
             if (f.startsWith("=")) f = f.substring(1);
-            try { val = Double.parseDouble(f); } catch (NumberFormatException e) { val = formulaNumber(f, r, c); } // 数式は評価する (exp77)
+            try { val = Double.parseDouble(f); } catch (NumberFormatException e) { val = formulaNumber(f, r, c); } // 数式は評価する
         }
         if (th.getRangeType() == ConditionalFormattingThreshold.RangeType.FORMULA) return val != null ? val : (isMin ? mm[0] : mm[1]);
         return switch (th.getRangeType()) {
@@ -589,7 +584,7 @@ public final class CondFormat {
             cc[i] = color(cols[i]);
             if (cc[i] == null) cc[i] = Color.WHITE;
         }
-        // 最大以上は最大の色 (全部が同じ値・1 セルだけの範囲も最大の色。Excel の印刷 exp78)
+        // 最大以上は最大の色 (全部が同じ値・1 セルだけの範囲も最大の色)
         if (v >= pos[n - 1]) return cc[n - 1];
         if (v <= pos[0]) return cc[0];
         for (int i = 1; i < n; i++) {

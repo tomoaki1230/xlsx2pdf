@@ -68,7 +68,7 @@ final class HeaderImages {
                 try (InputStream in = ip.getInputStream()) {
                     data = in.readAllBytes();
                 }
-                // 切り抜き・グレースケール・明るさ (VML の imagedata の属性。exp122 img_crop・img_color)
+                // 切り抜き・グレースケール・明るさ (VML の imagedata の属性)
                 String key = ip.getPartName().getName();
                 byte[] adj = adjust(data, im);
                 if (adj != data) key = key + "#" + im.getAttribute("cropleft") + im.getAttribute("croptop") + im.getAttribute("cropright")

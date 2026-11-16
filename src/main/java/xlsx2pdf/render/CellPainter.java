@@ -33,8 +33,6 @@ import xlsx2pdf.render.CondFormat.Edge;
 
 /** セルのブロックの背景・罫線・文字を描く。 */
 public final class CellPainter {
-    /** 横の余白 (PAD_PRINT が 0 以下のときの固定値)。 */
-    static final double PAD_X_FIXED = 1.92;
     /** 横の余白: 用紙上で一定 (1.5pt) なので、縮小するとシートの単位では大きくなる。 */
     static final double PAD_PRINT = 1.5;
     /** 上・下の余白。 */
@@ -159,13 +157,54 @@ public final class CellPainter {
     /** セルの境界から文字までの余白 (シートの pt): ceil(セルのフォントのプリンタの数字幅 / 4) 画素。 */
     private double digitPad() {
         double sc = Math.max(0.1, L.scale);
-        double size = padFont != null ? padFont.getFontHeight() / 20.0 : L.model().defaultSize();
+        double size = !Double.isNaN(padSize) ? padSize : padFont != null ? padFont.getFontHeight() / 20.0 : L.model().defaultSize();
         double[] g = padFont != null ? FontManager.gdiMetrics(ctx.cellFontName(padFont)) : null;
         double em = g != null ? g[2] : L.model().digitEm;
         long ppem = (long) Math.floor(Math.floor(size * 20 * sc + 0.5 + 1e-9) * 5 / 12 + 0.5 + 1e-9);
         long digit = Math.round(em * ppem);
         // 余白は文字の大きさで決まる: ceil(P / 8) 画素
         return Math.ceil(digit / 4.0) * 0.12 / sc;
+    }
+
+    /** 余白の計算に使うフォントの大きさ (pt)。NaN ならセルのフォントの大きさ。 */
+    private double padSize = Double.NaN;
+
+    /**
+     * 縮小して全体を表示: プリンタ (600 dpi) の ppem を元の大きさから 1 ずつ下げ、文字の幅 (格子に吸着した送り幅) + 縮めた後のフォントの
+     * 左右の余白がセルの幅 w に収まる最初の ppem にする。描く大きさは ppem × 0.12pt。複数のランは同じ比で ppem を下げる。
+     * Excel の規則に近いが同じではない (Excel はこれより 1〜3 ppem 小さく選ぶことがある)。
+     *
+     * @param extraL 左の余白に足す字下げ (pt)
+     * @param extraR 右の余白に足す字下げ (pt)
+     * @return {左の余白, 右の余白}
+     */
+    private double[] shrinkSteps(List<TextLayout.Run> runs, double w, double extraL, double extraR) {
+        double sc = Math.max(0.1, L.scale);
+        float[] base = new float[runs.size()];
+        for (int i = 0; i < base.length; i++) base[i] = runs.get(i).size;
+        float first = base[0];
+        long ppem0 = ppemOf(first, sc);
+        double padL = padX() + extraL, padR = padX() + extraR;
+        for (int k = 1; k < 2000; k++) {
+            long p0 = ppem0 - k;
+            if (p0 < 1) break;
+            double ratio = (double) p0 / ppem0;
+            for (int i = 0; i < base.length; i++) {
+                long p = Math.round(ppemOf(base[i], sc) * ratio);
+                runs.get(i).size = (float) (Math.max(1, p) * 0.12 / sc);
+            }
+            padSize = runs.get(0).size;
+            padL = padX() + extraL;
+            padR = padX() + extraR;
+            padSize = Double.NaN;
+            if (totalWidth(runs) + padL + padR <= w + 1e-6) break;
+        }
+        return new double[] {padL, padR};
+    }
+
+    /** フォントの大きさ (pt) の 600 dpi のプリンタでの ppem。 */
+    private static long ppemOf(double size, double sc) {
+        return (long) Math.floor(Math.floor(size * 20 * sc + 0.5 + 1e-9) * 5 / 12 + 0.5 + 1e-9);
     }
 
     /** 横の余白 (シートの pt)。 */
@@ -276,7 +315,7 @@ public final class CellPainter {
                 int r = row.getRowNum();
                 if (r > lastRow) break;
                 if (L.rh(r) <= 0) continue;
-                // 右へ傾けた文字のセル: 平行四辺形の右上の角がかかる列まで印刷する (Excel の印刷 exp84)
+                // 右へ傾けた文字のセル: 平行四辺形の右上の角がかかる列まで印刷する
                 for (var cl : row) {
                     if (!(cl.getCellStyle() instanceof XSSFCellStyle cst)) continue;
                     double sl = slantAngle(cst);
@@ -292,7 +331,7 @@ public final class CellPainter {
                 }
                 int c = -1;
                 for (int k = row.getLastCellNum() - 1; k >= 0 && c < 0; k--) {
-                    // 非表示の列の文字は印刷されないので、範囲を広げない (夜間 n0467)
+                    // 非表示の列の文字は印刷されないので、範囲を広げない
                     if (L.cw(k) > 0 && !isEmpty((XSSFCell) row.getCell(k))) c = k;
                 }
                 if (c < 0 || L.mergedAt(r, c) != null) continue;
@@ -542,7 +581,7 @@ public final class CellPainter {
             }
         } else if (Math.abs(deg - 90 * Math.round(deg / 90)) < 1e-9) {
             // 縦・横 (0・90・180・270 度): Excel の印刷と同じく、各チャンネルを 2 段ずつ変える帯を並べる。帯の数は区間ごとに
-            // 最大のチャンネルの差 ÷ 2 (白 → 0070C0 で 128) と終わりの色の 1 本、幅は長さ ÷ 本数 (Excel の印刷 exp59)
+            // 最大のチャンネルの差 ÷ 2 (白 → 0070C0 で 128) と終わりの色の 1 本、幅は長さ ÷ 本数
             int q = (int) Math.floorMod(Math.round(deg / 90), 4);
             boolean horizontal = q % 2 == 0, reverse = q >= 2;
             List<Color> bands = new ArrayList<>();
@@ -688,7 +727,7 @@ public final class CellPainter {
         double sx = L.x(s.c0), sy = L.y(s.r0);
         FontManager.Spec spec = headingFont();
         float size = headingSize();
-        // 游ゴシック (9pt 超) の行列番号は Meiryo UI 9pt で描き、Excel はそれを上・右へずらす (exp46d・exp46 の実測)
+        // 游ゴシック (9pt 超) の行列番号は Meiryo UI 9pt で描き、Excel はそれを上・右へずらす
         String dn = ctx.defaultFontName == null ? "" : ctx.defaultFontName;
         boolean yuHead = (dn.startsWith("游ゴシック") || dn.toLowerCase(java.util.Locale.ROOT).startsWith("yu gothic")) && ctx.defaultFontSize > 9;
         double asc = spec.ascent * size, desc = spec.descent * size;
@@ -752,12 +791,9 @@ public final class CellPainter {
 
     // -------------------------------------------------------------- 枠線
 
-    /** 枠線を描く (結合範囲の内側は描かない)。 */
-    static boolean GRID_EXCEL = Boolean.parseBoolean(System.getProperty("x2p.grid", "true"));
-
     private void paintGridlines(PdfCanvas cv, Paginator.Segment s) throws IOException {
-        // Excel の印刷は枠線を 0.14pt の線と、同じ位置の 0.12pt の塗りの重ねで描く (exp79 の head_*: 60dpi で B5 の濃さ)
-        PdfCanvas.Stroke st = new PdfCanvas.Stroke(GRID_EXCEL ? 0.14f : 0.24f);
+        // Excel の印刷は枠線を 0.14pt の線と、同じ位置の 0.12pt の塗りの重ねで描く (60dpi で B5 の濃さ)
+        PdfCanvas.Stroke st = new PdfCanvas.Stroke(0.14f);
         Color gc = Color.BLACK;
         for (int r = s.r0; r <= s.r1 + 1; r++) {
             double y = L.y(r);
@@ -767,7 +803,7 @@ public final class CellPainter {
                 while (c <= s.c1 && !insideMergedH(r, c)) c++;
                 if (c > start) {
                     cv.line(L.x(start), y, L.x(c), y, st, gc);
-                    if (GRID_EXCEL) cv.fillRect(L.x(start), y - 0.06, L.x(c) - L.x(start), 0.12, gc);
+                    cv.fillRect(L.x(start), y - 0.06, L.x(c) - L.x(start), 0.12, gc);
                 }
                 while (c <= s.c1 && insideMergedH(r, c)) c++;
             }
@@ -780,7 +816,7 @@ public final class CellPainter {
                 while (r <= s.r1 && !insideMergedV(r, cc)) r++;
                 if (r > start) {
                     cv.line(x, L.y(start), x, L.y(r), st, gc);
-                    if (GRID_EXCEL) cv.fillRect(x - 0.06, L.y(start), 0.12, L.y(r) - L.y(start), gc);
+                    cv.fillRect(x - 0.06, L.y(start), 0.12, L.y(r) - L.y(start), gc);
                 }
                 while (r <= s.r1 && insideMergedV(r, cc)) r++;
             }
@@ -971,7 +1007,7 @@ public final class CellPainter {
                 i = k + 1;
             }
         }
-        // 斜めの線 (対角線と、斜めの文字のセルの平行四辺形) は、ページの本体の左右の範囲で切る (Excel の印刷 exp84)
+        // 斜めの線 (対角線と、斜めの文字のセルの平行四辺形) は、ページの本体の左右の範囲で切る
         if (!diagonals.isEmpty() && cv != null) {
             cv.save();
             cv.clipRect(L.x(s.c0), L.y(s.r0) - 10000, L.x(s.c1 + 1) - L.x(s.c0), 20000 + L.y(s.r1 + 1) - L.y(s.r0));
@@ -1044,7 +1080,7 @@ public final class CellPainter {
         if (b.isSetDiagonalUp() && b.getDiagonalUp()) { out.add(new double[] {x0, y1, x1, y0}); edges.add(e); }
     }
 
-    /** 文字を斜めに回したセルの罫線: 文字の向きに傾けた平行四辺形の 4 辺 (Excel の印刷 exp83・exp84)。 */
+    /** 文字を斜めに回したセルの罫線: 文字の向きに傾けた平行四辺形の 4 辺。 */
     private void slantEdges(XSSFCellStyle st, CondFormat.Result cfr, int r, int c, double slant, List<double[]> out, List<Edge> edges) {
         double x0 = L.x(c), x1 = x0 + L.cw(c), yT = L.y(r), yB = yT + L.rh(r);
         double sh = L.rh(r) / Math.tan(Math.toRadians(Math.abs(slant))) * Math.signum(slant);
@@ -1074,7 +1110,7 @@ public final class CellPainter {
 
     /**
      * 収まらない数値の # の並び (n 文字)。分数 (? の空白 U+2007 と / を含む表示) は、表示の文字列の分子の前の空白だけを空白のまま残し、
-     * ほかの文字 (整数部とその後の区切りの空白を含む) を # にして先頭から n 文字 (Excel の印刷 exp85: 「# ??/??」の 12.4 は「### ##」)。
+     * ほかの文字 (整数部とその後の区切りの空白を含む) を # にして先頭から n 文字 (「# ??/??」の 12.4 は「### ##」)。
      */
     static String fractionHashes(String text, int n) {
         int slash = text == null ? -1 : text.indexOf('/');
@@ -1089,7 +1125,7 @@ public final class CellPainter {
         return sb.toString();
     }
 
-    /** 罫線 (上下左右) のある書式か (斜めの文字のセルは、罫線があるときだけ平行四辺形の分を印刷の範囲に入れる。exp47・exp84)。 */
+    /** 罫線 (上下左右) のある書式か (斜めの文字のセルは、罫線があるときだけ平行四辺形の分を印刷の範囲に入れる)。 */
     private static boolean hasAnyBorder(XSSFCellStyle st) {
         return st.getBorderTop() != BorderStyle.NONE || st.getBorderBottom() != BorderStyle.NONE
                 || st.getBorderLeft() != BorderStyle.NONE || st.getBorderRight() != BorderStyle.NONE;
@@ -1254,7 +1290,7 @@ public final class CellPainter {
             int n = rs.numFormattingRuns();
             int pos = 0;
             for (int i = 0; i < n; i++) {
-                // ランの位置は文字列の長さに収める (_x0000_ などの制御文字の数え方で POI の文字列より先を指すことがある。rand30 rd09)
+                // ランの位置は文字列の長さに収める (_x0000_ などの制御文字の数え方で POI の文字列より先を指すことがある)
                 int start = Math.min(s.length(), rs.getIndexOfFormattingRun(i));
                 int len = rs.getLengthOfFormattingRun(i);
                 if (start > pos) out.add(run(s.substring(pos, start), base, cfr, vr.color));
@@ -1350,14 +1386,11 @@ public final class CellPainter {
                     }
                 }
             }
-            if (s.c0 > 0 && s.body && !measuringRange && spillOn()) {
+            if (s.c0 > 0 && s.body && !measuringRange) {
                 int k = spillColumn(row, r, s);
-                // 印刷範囲のあるシート: 行のセルの定義がこのページの列まで届かない行は、Excel は続きを描かない (夜間 n2348。届く行は描く: n3507)
-                if (k >= 0 && !ps.printAreas.isEmpty() && (SPILL_AREA == 1 || SPILL_AREA == 3) && row.getLastCellNum() - 1 < s.c0) k = -1;
-                if (k >= 0 && !ps.printAreas.isEmpty() && (SPILL_AREA == 2 || SPILL_AREA == 3) && !screenSpill(row.getCell(k), s.c0)) k = -1;
-                // 印刷範囲の最後の列まで (画面の寸法で) 届く文字だけ、続きのページに描く (試験 fb3-b3・fb3-b4)
-                if (k >= 0 && !ps.printAreas.isEmpty() && SPILL_AREA == 4 && !screenSpill(row.getCell(k), areaLastColumn(r, s.c0, s.c1))) k = -1;
-                if (k >= 0 && System.getProperty("x2p.dbgspill") != null) System.err.println("SPILL " + sheet.getSheetName() + " " + row.getCell(k).getReference() + " -> col " + s.c0 + " lastCell=" + row.getLastCellNum() + " align=" + row.getCell(k).getCellStyle().getAlignment() + " type=" + row.getCell(k).getCellType());
+                // 印刷範囲のあるシート: 行のセルの定義がこのページの列まで届かない行は、Excel は続きを描かない
+                if (k >= 0 && !ps.printAreas.isEmpty() && row.getLastCellNum() - 1 < s.c0) k = -1;
+                if (k >= 0 && !ps.printAreas.isEmpty() && !screenSpill(row.getCell(k), s.c0)) k = -1;
                 if (k >= 0 && row.getCell(k) != null && row.getCell(k).getCellStyle() != null && slantAngle(row.getCell(k).getCellStyle()) != 0) k = -1; // 斜めの文字は上で描いた
                 if (k >= 0) {
                     try {
@@ -1399,18 +1432,6 @@ public final class CellPainter {
         }
     }
 
-    /** 行 r・列 c を含む印刷範囲の最後の列 (なければ・列全体の範囲なら def)。 */
-    private int areaLastColumn(int r, int c, int def) {
-        for (CellRangeAddress a : ps.printAreas)
-            if (a.getFirstRow() <= r && r <= a.getLastRow() && a.getFirstColumn() <= c && c <= a.getLastColumn())
-                return a.getLastColumn() >= 16383 ? def : a.getLastColumn();
-        return def;
-    }
-
-    /** はみ出しの続きを次のページに描くか。 */
-    private boolean spillOn() { return SPILL_AREA > 0 || ps.printAreas.isEmpty(); }
-    /** 印刷範囲のあるシートのはみ出しの続き: 0 = 描かない、1 = いつも描く (行のセルの定義が届く行だけ)、2 = 画面の寸法でページの最初の列に届くとき、3 = 1 と 2 の両方、4 = 画面の寸法で印刷範囲の最後の列に届くとき (試験用)。既定は 3。 */
-    static final int SPILL_AREA = Integer.getInteger("x2p.spillarea", 3);   // 既定は無効: Excel が描く例 (夜間 n3507) と描かない例 (n2348・n2494・n3965) を分ける条件が未解明 (Fableレポート2 の 3)
 
     /**
      * 行 r で、前のページのセルから文字がはみ出してこのブロックに届く列を返す (なければ -1)。
@@ -1440,7 +1461,7 @@ public final class CellPainter {
     /** 前のページの文字のはみ出しがこのブロックに届くか (白紙の判定)。 */
     public boolean hasSpill(Paginator.Segment s) {
         // 印刷範囲のあるシートは何もないページも出力するので、調べなくてよい
-        if (s.c0 <= 0 || !spillOn() || !ps.printAreas.isEmpty()) return false;
+        if (s.c0 <= 0 || !ps.printAreas.isEmpty()) return false;
         for (int r = s.r0; r <= s.r1; r++) {
             ctx.checkDeadline();
             if (L.rh(r) <= 0) continue;
@@ -1462,8 +1483,7 @@ public final class CellPainter {
      */
     private void paintCellText(PdfCanvas cv, Paginator.Segment s, XSSFCell cell, CellRangeAddress m) throws IOException {
         int r = cell.getRowIndex(), c = cell.getColumnIndex();
-        // 前のセルのアイコンの待ちを持ち越さない (はみ出しを調べる段階は描く前に抜けるので残る。
-        // 結合した題名にアイコンが付き、アイコンだけの設定では題名が消えていた。exp124 icon_title・rand30 rd02)
+        // 前のセルのアイコンの待ちを持ち越さない (はみ出しを調べる段階は描く前に抜けるので残る)
         pendingIcon = null;
         suppressText = false;
         XSSFCellStyle st = cell.getCellStyle();
@@ -1498,7 +1518,7 @@ public final class CellPainter {
         }
         if (w <= 0 || h <= 0) return;
         // アイコンセット: アイコン (フォントの大きさ + 1pt の正方形) をセルの左に置き、文字はその右の範囲に配置する
-        // 白黒印刷ではアイコンを描かず、場所も空けない (Excel の印刷 exp124 bw_icons)
+        // 白黒印刷ではアイコンを描かず、場所も空けない
         IconSets.Icon icon = cfr != null && !bw() ? cfr.icon : null;
         double iconLeft = x0;
         if (icon != null) {
@@ -1528,10 +1548,10 @@ public final class CellPainter {
         if (ha == HorizontalAlignment.GENERAL) {
             // 縦書き (textRotation=255) の標準は中央
             if (al.rotation() == 255) ha = HorizontalAlignment.CENTER;
-            // 上向き 90 度の文字の標準は右 (Excel の印刷 exp86)
-            else if (al.rotation() == 90 && ROT90_NEW && !vr.number && !vr.bool) ha = HorizontalAlignment.RIGHT;
-            // 下向きに傾けた文字 (91〜179) の標準も右 (exp83 の −45 度)
-            else if (al.rotation() > 90 && al.rotation() < 180 && NEG_GEN_RIGHT && !vr.number && !vr.bool) ha = HorizontalAlignment.RIGHT;
+            // 上向き 90 度の文字の標準は右
+            else if (al.rotation() == 90 && !vr.number && !vr.bool) ha = HorizontalAlignment.RIGHT;
+            // 下向きに傾けた文字 (91〜179) の標準も右
+            else if (al.rotation() > 90 && al.rotation() < 180 && !vr.number && !vr.bool) ha = HorizontalAlignment.RIGHT;
             else ha = vr.number ? HorizontalAlignment.RIGHT : vr.bool ? HorizontalAlignment.CENTER : HorizontalAlignment.LEFT;
         }
         // 右から左のシート: 本体を左右反転して描くので、論理の配置の左右を入れ替える (反転後に Excel と同じ向き)。
@@ -1574,15 +1594,15 @@ public final class CellPainter {
         // 収まらない数値: 標準の表示形式なら桁を減らし、それでも収まらなければ # で埋める。真偽値も # で埋める
         if ((vr.number || vr.logical) && angle == 0 && !vertical && !shrink) {
             float tw = totalWidth(runs);
-            // 標準の表示形式の数値は、どの文字も数字 1 文字分の幅として、列に入る文字数で決める (Excel の印刷 exp105)
+            // 標準の表示形式の数値は、どの文字も数字 1 文字分の幅として、列に入る文字数で決める
             int genMax = -1;
-            // 長い数値に合わせて広げた列 (numWiden) は、Excel が数値の入る幅にしたので数えない (exp35)
-            if (GEN_COUNT && vr.general && vr.number && !L.numWidened(c)) {
+            // 長い数値に合わせて広げた列 (numWiden) は、Excel が数値の入る幅にしたので数えない
+            if (vr.general && vr.number && !L.numWidened(c)) {
                 float dw = runs.get(0).spec.width("0", runs.get(0).size, ctx.fonts);
                 genMax = dw > 0 ? (int) Math.floor((availW + 0.01) / dw) : 0;
                 if (vr.text.length() > genMax) tw = Float.MAX_VALUE;
             }
-            // 日付として表せない値 (負、9999 年より後) は、幅によらずセルの幅いっぱいの # (Excel の印刷 exp96)
+            // 日付として表せない値 (負、9999 年より後) は、幅によらずセルの幅いっぱいの #
             boolean badDate = vr.number && !vr.text.isEmpty() && vr.text.chars().allMatch(ch -> ch == '#');
             if (tw > availW + 0.01 || badDate) {
                 String fitted = null;
@@ -1638,11 +1658,11 @@ public final class CellPainter {
         }
 
         if (measuringRange && m == null && angle > 0 && angle < 90 && st != null && hasAnyBorder(st)) {
-            // 右へ傾けた文字: 文字の右端がかかる列まで印刷する (Excel の印刷 exp84。罫線だけでは広げない: exp83)
+            // 右へ傾けた文字: 文字の右端がかかる列まで印刷する
             double mx = paintSlanted(null, TextLayout.layout(runs, 0, false, true, ctx.fonts), x0, y0, w, h, ha, va, angle);
             int cc = c;
-            // 右の列に値のあるセルがあれば、そこで止める (普通のはみ出しと同じ。総当たり sw-rot: C 列に値があり Excel は広げない)
-            while (cc + 1 <= s.c1 && L.x(cc + 1) < mx && !(ROT_RANGE_STOP && !isEmpty(cellAt(r, cc + 1)))) cc++;
+            // 右の列に値のあるセルがあれば、そこで止める (普通のはみ出しと同じ。C 列に値があり Excel は広げない)
+            while (cc + 1 <= s.c1 && L.x(cc + 1) < mx && isEmpty(cellAt(r, cc + 1))) cc++;
             rangeLast = Math.max(rangeLast, cc);
             return;
         }
@@ -1681,7 +1701,12 @@ public final class CellPainter {
             }
             double avail = h - padTop() - padBottom();
             if (n > 0 && need > avail) sizeScale = (float) (avail / need);
-        } else if (shrink && textW > availW && textW > 0) sizeScale = (float) (availW / textW);
+        } else if (shrink && textW > availW && textW > 0) {
+            double[] pad = shrinkSteps(runs, w, padL - padX(), padR - padX());
+            padL = pad[0];
+            padR = pad[1];
+            availW = Math.max(0, w - padL - padR);
+        }
         if (sizeScale < 1) {
             for (TextLayout.Run rr : runs) rr.size *= sizeScale;
         }
@@ -1999,7 +2024,7 @@ public final class CellPainter {
         extraAscent = (a - l.ascent / u) * u;
         int n = lines.size();
         long off;
-        // 上付き・下付きの小さい文字が上下にはみ出す分 (画素)。Excel は行の高さに入れて中央に置く (exp91)
+        // 上付き・下付きの小さい文字が上下にはみ出す分 (画素)。Excel は行の高さに入れて中央に置く
         long ea = 0, eb = 0;
         for (TextLayout.Run r : l.runs) {
             if (r.baselineShift == 0) continue;
@@ -2041,8 +2066,8 @@ public final class CellPainter {
         }
         double rubyH = phon != null ? phon.lineH : 0;
         total += rubyH * lines.size();
-        // 結合セルに 1 行分以上収まらない複数行の文字は、縦の配置によらず先頭の行から描く (Excel の印刷 exp124 over_vbottom・vcenter・vdist)。
-        // わずかなはみ出しは配置どおり (実ファイルの様式は行の見積もりの差で収まらない側に出ることがある。gtall2024 gov_001773009 など)
+        // 結合セルに 1 行分以上収まらない複数行の文字は、縦の配置によらず先頭の行から描く。
+        // わずかなはみ出しは配置どおり (実ファイルの様式は行の見積もりの差で収まらない側に出ることがある)
         if (mergedText && lines.size() > 1 && total > h - padTop() - padBottom() + pitch(lines.get(0)))
             va = va == VerticalAlignment.JUSTIFY || va == VerticalAlignment.DISTRIBUTED ? VerticalAlignment.JUSTIFY : VerticalAlignment.TOP;
         int phonPos = 0;
@@ -2261,7 +2286,7 @@ public final class CellPainter {
         }
         // 列の間隔は折り返した行の行送りと同じ。列のまとまりを横位置に合わせて置く
         TextLayout.Run f = runs.get(0);
-        double colPitch = STACK_ROT && yuFont(f) ? (f.spec.ascent + f.spec.descent) * f.size * ROT_PITCH : L.stackPitch(f.spec.requested, f.size);
+        double colPitch = yuFont(f) ? (f.spec.ascent + f.spec.descent) * f.size * ROT_PITCH : L.stackPitch(f.spec.requested, f.size);
         if (colPitch <= 0) colPitch = (f.spec.ascent + f.spec.descent) * f.size;
         double block = n * colPitch;
         double left = switch (ha) {
@@ -2289,7 +2314,7 @@ public final class CellPainter {
         if (data == null) return false;
         int[] wh = Images.size(data);
         if (wh == null || wh[0] <= 0 || wh[1] <= 0) return false;
-        // Excel の印刷は、セルの枠を左上へ 0.36pt ずらし 0.12pt 小さくした枠に収める (exp82: 大きさ・配置によらない)
+        // Excel の印刷は、セルの枠を左上へ 0.36pt ずらし 0.12pt 小さくした枠に収める (大きさ・配置によらない)
         double cx0 = x0, cy0 = y0, cw = w, ch = h;
         x0 -= IMG_SHIFT; y0 -= IMG_SHIFT; w = Math.max(0, w - IMG_SHRINK); h = Math.max(0, h - IMG_SHRINK);
         double k = Math.min(w / wh[0], h / wh[1]);
@@ -2364,14 +2389,14 @@ public final class CellPainter {
      */
     private double stackPitch(TextLayout.Run f) {
         double font = (f.spec.ascent + f.spec.descent) * f.size;
-        // 游ゴシックは回転と同じ (アセント + ディセント) × 1.07 (Excel の印刷 exp86: 11pt で 18.48pt)。MS 明朝・BIZ UD 明朝などは
-        // フォントの自動行高 (実際のブック mun_461774・mun_idou2026)
-        if (STACK_ROT && yuFont(f)) return font * ROT_PITCH;
+        // 游ゴシックは回転と同じ (アセント + ディセント) × 1.07 (11pt で 18.48pt)。MS 明朝・BIZ UD 明朝などは
+        // フォントの自動行高
+        if (yuFont(f)) return font * ROT_PITCH;
         double p = L.stackPitch(f.spec.requested, f.size);
         return p > 0 ? p : font;
     }
 
-    /** 回転した文字の行の間隔: 游ゴシックは (アセント + ディセント) × 1.07 (exp83〜86)、ほかは折り返しの行送り (exp91)。 */
+    /** 回転した文字の行の間隔: 游ゴシックは (アセント + ディセント) × 1.07、ほかは折り返しの行送り。 */
     private double rotPitch(TextLayout.Line l) {
         double base = (l.ascent + l.descent) * ROT_PITCH;
         return base;
@@ -2455,7 +2480,7 @@ public final class CellPainter {
         if (lines.isEmpty()) return;
         if (rotWrap) {
             // 折り返す回転した文字: 1 行の縦の広がり (長さ × sin + 行の高さ × cos) がセルの高さ − 上下の余白に収まる長さで折り返す
-            // (exp124 rot_wrap_45・m30・90: 3 つの角度の折り返し位置が合う)
+            // (3 つの角度の折り返し位置が合う)
             double ra = Math.toRadians(Math.abs(angleDeg));
             double lh = lines.get(0).ascent + lines.get(0).descent;
             double len = (h - padTop() - padBottom() - lh * Math.cos(ra)) / Math.max(0.05, Math.sin(ra));
@@ -2471,11 +2496,11 @@ public final class CellPainter {
         }
         double a = Math.toRadians(angleDeg);
         double cos = Math.abs(Math.cos(a)), sin = Math.abs(Math.sin(a));
-        if (sin >= 0.999 && ROT90_NEW) {
+        if (sin >= 0.999) {
             paintRot90(cv, lines, x0, y0, w, h, ha, va, angleDeg > 0);
             return;
         }
-        if (slantBox && (sin < 0.999 && sin > 0.01 || lines.size() > 1 && sin >= 0.999 && ROT90_SLANT)) {
+        if (slantBox && sin < 0.999 && sin > 0.01) {
             paintSlanted(cv, lines, x0, y0, w, h, ha, va, angleDeg);
             return;
         }
@@ -2513,22 +2538,17 @@ public final class CellPainter {
     }
 
     /**
-     * 複数行の回転した文字 (Excel の印刷 exp47): 各行の書き始めの点を同じ高さに揃え、行の間隔 ÷ sin(角度) ずつ横にずらす
+     * 複数行の回転した文字: 各行の書き始めの点を同じ高さに揃え、行の間隔 ÷ sin(角度) ずつ横にずらす
      * (行の間隔は文字のアセント + ディセントの 1.07 倍。游ゴシック 11pt で 18.48pt)。全体の外枠をセルの配置に合わせて置く。
      */
     static final double ROT_PITCH = 1.07, ROT_ASC_EXTRA = 1.11;
     /** 游ゴシック 11pt のアセント + ディセント (pt)。回転の配置の数値はこの大きさのもの。 */
     static final double YU11_AD = 18.48 / 1.07;
-    /** 狭い列の「標準」の数値を、どの文字も数字 1 文字分の幅として数える (exp105・exp36。Calibri などで少し外れる)。 */
-    static final boolean GEN_COUNT = true;
-    static boolean NEG_GEN_RIGHT = Boolean.parseBoolean(System.getProperty("x2p.neggen", "true"));
-    static boolean STACK_ROT = Boolean.parseBoolean(System.getProperty("x2p.stack", "true"));
-    static boolean ROT90_NEW = Boolean.parseBoolean(System.getProperty("x2p.r90", "true"));
-    static double R90_TOP = Double.parseDouble(System.getProperty("x2p.r90top", "0.56")), R90_BOT = Double.parseDouble(System.getProperty("x2p.r90bot", "0.63"));
-    static double M90_TOP = Double.parseDouble(System.getProperty("x2p.m90top", "2.58")), M90_BOT = Double.parseDouble(System.getProperty("x2p.m90bot", "0"));
+    static final double R90_TOP = 0.56, R90_BOT = 0.63;
+    static final double M90_TOP = 2.58, M90_BOT = 0;
 
     /**
-     * ±90 度の文字 (Excel の印刷 exp86。罫線の有無によらない。数値は游ゴシック 11pt のもので文字の大きさに比例)。
+     * ±90 度の文字 (罫線の有無によらない。数値は游ゴシック 11pt のもので文字の大きさに比例)。
      * 行は +90 度は右へ、−90 度は左へ (アセント + ディセント) × 1.07 ずつ並べる。横の配置: +90 度は左で 1 行目の基線をセルの左 + 13.54、
      * 右で最後の行をセルの右 − 9.1。−90 度は左で最後の行をセルの左 + 5.65、右で 1 行目をセルの右 − 16.74。中央はその間。
      * 縦の配置は行ごとに当てる: +90 度は下で書き始めを下 − 0.63、上で書き終わりを上 + 0.56。−90 度は上で書き始めを上 + 2.58、
@@ -2570,15 +2590,12 @@ public final class CellPainter {
             cv.restore();
         }
     }
-    /** 斜めの文字で印刷範囲を広げるとき、右の値のあるセルで止める。 */
-    static final boolean ROT_RANGE_STOP = !"0".equals(System.getProperty("x2p.rotstop"));
 
-    /** 描いている斜めの文字のセルに罫線がある (Excel は罫線のあるセルだけ平行四辺形として文字を置く。exp47 と exp84 の比較)。 */
+    /** 描いている斜めの文字のセルに罫線がある (Excel は罫線のあるセルだけ平行四辺形として文字を置く)。 */
     private boolean slantBox;
-    static boolean ROT90_SLANT = Boolean.parseBoolean(System.getProperty("x2p.rot90", "false"));
 
     /**
-     * 斜めの文字 (0 < |角度| < 90) を Excel の印刷と同じに置く (exp83・exp84 の実測。数値は游ゴシック 11pt のもので、文字の大きさに比例させる)。
+     * 斜めの文字 (0 < |角度| < 90) を Excel の印刷と同じに置く (数値は游ゴシック 11pt のもので、文字の大きさに比例させる)。
      * セルを、下の辺 (負の角度は上の辺) と文字の向きの辺で張る平行四辺形とみなし、横の位置 a (水平) と文字の向きの位置 b で表す。
      * <ul>
      *   <li>行は a の向きに行の間隔 ÷ sin ずつ並べる。横の配置: 左は a = −2.8 + 20.14 / sin、右は a = 幅 − 6.67 + 1.69 / sin
@@ -2602,7 +2619,7 @@ public final class CellPainter {
         double pitch = rotPitch(l0), step = pitch / sn;
         double len = h / sn, ext = (19.37 * cot + 2.32) * k, bLow = (1.14 - 0.834 * cot) * k;
         // 横 (a): 正の角度の左・右
-        // 45 度を超えると左へ (60 度で 1.28pt。exp84)
+        // 45 度を超えると左へ (60 度で 1.28pt)
         double steep = Math.max(0, Math.abs(angleDeg) - 45) / 15 * 1.28 * k;
         double aL = -2.8 * k + 20.14 * k / sn - steep, aR = w - 6.67 * k + 1.69 * k / sn - (n - 1) * step - steep;
         boolean left = ha == HorizontalAlignment.LEFT || ha == HorizontalAlignment.GENERAL || ha == HorizontalAlignment.FILL;
@@ -2611,11 +2628,11 @@ public final class CellPainter {
         if (!neg) a1 = left ? aL : right ? aR : (aL + aR) / 2;
         else {
             double d = (1.17 - 4.15 * sn) * k;
-            // 負の角度は左右を入れ替え、行は左へ並べる (1 行目が右。Excel の印刷 exp83)
+            // 負の角度は左右を入れ替え、行は左へ並べる (1 行目が右)
             double aR1 = w - 6.67 * k + 1.69 * k / sn;
             double nl = w - aR1 + d + (n - 1) * step, nr = w - aL + d;
             a1 = left ? nl : right ? nr : (nl + nr) / 2;
-            if (!right) a1 += 0.322 * (n - 1) * step; // 複数行の左・中央は右へ (exp83 の −45 度の 2 行で 8.4pt)
+            if (!right) a1 += 0.322 * (n - 1) * step; // 複数行の左・中央は右へ
         }
         // 縦 (b): 文字の向きに沿った、まとまりの始まり
         boolean top = va == VerticalAlignment.TOP, bottom = va == VerticalAlignment.BOTTOM;
@@ -2670,8 +2687,7 @@ public final class CellPainter {
             case CENTER, JUSTIFY, DISTRIBUTED -> y0 + (h - bh) / 2;
             default -> y0 + h - padBottom() - bh;
         };
-        // Excel は行の上側に文字の大きさ × 1.11 の高さを見込んで上下に揃える (exp47: 30・45 度で 5.2・4.4pt 下)
-        double size0 = lines.get(0).runs.isEmpty() ? 11 : lines.get(0).runs.get(0).size;
+        // Excel は行の上側に文字の大きさ × 1.11 の高さを見込んで上下に揃える (30・45 度で 5.2・4.4pt 下)
         double dx = left - minX, dy = top - minY + (va == VerticalAlignment.CENTER ? 0.5 : va == VerticalAlignment.TOP ? 1 : 0)
                 * (lines.get(0).ascent + lines.get(0).descent) / YU11_AD * 11 * ROT_ASC_EXTRA * Math.abs(ca);
         for (int i = 0; i < n; i++) {

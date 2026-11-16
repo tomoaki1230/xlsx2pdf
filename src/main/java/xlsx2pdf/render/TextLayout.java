@@ -202,14 +202,11 @@ public final class TextLayout {
     /**
      * 行数の数え方 (行の高さの数え直し用): 全角の空白を行末にぶら下げず、普通の文字と同じく次の行へ送る。送った後の行頭の
      * 空白は捨てるが、空白だけで空のまま改行に来た行は 1 行に数える。Excel の行の高さの数え直しの実測
-     * (munp_eiyoukanrihoukokusyo_fukushi の「…大切である。」+ 全角の空白 15 個 + 改行で 1 行増える)。描くときはぶら下げる。
+     * (」+ 全角の空白 15 個 + 改行で 1 行増える)。描くときはぶら下げる。
      */
     public static List<Line> layoutCounting(List<Run> runs, float maxWidth, FontManager fm) {
-        return layout(runs, maxWidth, true, true, fm, null, 0, 0, WIDE_SPACE_WRAPS, true);
+        return layout(runs, maxWidth, true, true, fm, null, 0, 0, false, true);
     }
-
-    /** 行数の数え方で全角の空白を折り返すか (試した規則。評価の組で合わないので使わない)。 */
-    static boolean WIDE_SPACE_WRAPS = false;
 
     private static List<Line> layout(List<Run> runs, float maxWidth, boolean wrap, boolean keepNewlines, FontManager fm,
                                      TabStops tabs, float firstOffset, float otherOffset, boolean wideSpaceWraps, boolean pixelAdvance) {
@@ -420,7 +417,7 @@ public final class TextLayout {
         PdfCanvas.Stroke st = new PdfCanvas.Stroke(t);
         if (r.underline >= 1) {
             // 会計用の下線は、普通の下線より大きさ × 0.207 下 (Excel の印刷: 11pt で 2.28pt)
-            // 会計用の下線の下げ幅は書体のディセントに比例 (游ゴシックのディセント 0.445em で 0.207em。Excel の印刷 exp96)
+            // 会計用の下線の下げ幅は書体のディセントに比例 (游ゴシックのディセント 0.445em で 0.207em)
             double acc = r.spec != null && r.spec.descent > 0 ? r.size * r.spec.descent * 0.465 : r.size * 0.207;
             double y = baseline + r.size * 0.12 + (r.accounting ? acc : 0);
             double u0 = Double.isNaN(r.ulFrom) ? x0 : r.ulFrom, u1 = Double.isNaN(r.ulTo) ? x1 : r.ulTo;

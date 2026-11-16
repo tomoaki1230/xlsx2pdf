@@ -113,33 +113,21 @@ public final class DrawingPainter {
         return an;
     }
 
-    /**
-     * セルの中のオフセット (EMU) の pt。図形・画像は、Excel と同じく画面の画素 (914400 / 画面 DPI EMU) に切り捨てる
-     * (外部の報告: oneCellAnchor の colOff 3.68px・rowOff 11.64px は 3px・11px の位置に描かれる。excel-local の図形の試験 44 件 0.9739 → 0.9768)。
-     * グラフなどの graphicFrame は切り捨てない (切り捨てると試験の上下が同じくらい出る。グラフの規則は別)。
-     */
-    private double pxFloor(long off) {
-        if (curFrame) return off / EMU;
-        double emuPx = 914400.0 / L.screenDpi();
-        return Math.floor(off / emuPx + 1e-9) * emuPx / EMU;
-    }
+    /** 白紙のページ・使用範囲・描くページの判定中か (このときは {@link #rect} で図形を動かさない)。 */
+    private boolean judging;
 
     /** 列 c からオフセット (EMU) の位置 (シートの pt。オフセットは列幅を超えない)。 */
     private double colPos(int c, long off) {
-        return L.x(c) + Math.min(pxFloor(off) * L.xScale, L.cw(c));
+        return L.x(c) + Math.min(off / EMU * L.xScale, L.cw(c));
     }
 
     /** 行 r からオフセット (EMU) の位置 (シートの pt。オフセットは行高を超えない)。 */
     private double rowPos(int r, long off) {
-        return L.y(r) + Math.min(pxFloor(off) * L.yScale, L.rh(r));
+        return L.y(r) + Math.min(off / EMU * L.yScale, L.rh(r));
     }
 
-    /** アンカーの矩形 (シートの pt)。 */
-    /** 今計算しているアンカーのオブジェクトが graphicFrame か ({@link #pxFloor})。 */
-    private boolean curFrame;
-
-    private Rectangle2D rect(Anchor a) {
-        curFrame = a.frame;
+    /** アンカーの矩形 (シートの pt。ずらす前)。 */
+    private Rectangle2D rect0(Anchor a) {
         switch (a.kind) {
             case "twoCellAnchor" -> {
                 double x0 = colPos(a.c0, a.c0Off), y0 = rowPos(a.r0, a.r0Off);
@@ -155,6 +143,21 @@ public final class DrawingPainter {
                 return new Rectangle2D.Double(a.x / EMU * L.xScale, a.y / EMU * L.yScale, a.cx / EMU, a.cy / EMU);
             }
         }
+    }
+
+    /**
+     * 図形・画像を描く位置を、セルより左上へずらす量 (600 dpi のプリンタの画素)。Excel の図形はアンカーの位置より 4 辺とも
+     * 約 4 画素 (0.48pt) 左上に描かれ、大きさは変わらない。標準の書体や列・行の縮小率によらない。
+     * アンカーのずれ (colOff・rowOff) は画素に丸めない。グラフなど graphicFrame はずらさない。
+     */
+    static final double OBJECT_SHIFT_PX = 4;
+
+    /** アンカーの矩形。図形・画像は {@link #OBJECT_SHIFT_PX} だけ左上へずらす (判定中はずらさない)。 */
+    private Rectangle2D rect(Anchor a) {
+        Rectangle2D r = rect0(a);
+        double d = a.frame ? 0 : OBJECT_SHIFT_PX * 0.12 / Math.max(0.1, L.scale);
+        if (d == 0 || judging) return r;
+        return new Rectangle2D.Double(r.getX() - d, r.getY() - d, r.getWidth(), r.getHeight());
     }
 
     /** 印刷するオブジェクトが覆う範囲 {最終行, 最終列, 先頭行, 先頭列}。なければ null。 */
@@ -176,7 +179,9 @@ public final class DrawingPainter {
                 if (tmp == null) tmp = new SheetLayout(sheet, ctx.mdw, ctx.printer, 600, 600, 3000, 300);
                 SheetLayout saved = L;
                 L = tmp;
+                judging = true;
                 Rectangle2D r = rect(an);
+                judging = false;
                 L = saved;
                 int[] end = cellAt(tmp, r.getMaxX(), r.getMaxY());
                 int[] st = cellAt(tmp, r.getX(), r.getY());
@@ -202,7 +207,9 @@ public final class DrawingPainter {
         double x0 = L.x(c0), y0 = L.y(r0), x1 = L.x(c1 + 1), y1 = L.y(r1 + 1);
         for (Element a : anchors) {
             if (!printable(a)) continue;
+            judging = true;
             Rectangle2D r = rect(anchor(a));
+            judging = false;
             if (r.getMaxX() > x0 && r.getX() < x1 && r.getMaxY() > y0 && r.getY() < y1) return true;
         }
         for (VmlControls.Control c : controls) {
@@ -275,8 +282,11 @@ public final class DrawingPainter {
         for (Element a : anchors) {
             if (!printable(a)) continue;
             Anchor an = anchor(a);
+            judging = true;
+            Rectangle2D r0 = rect(an);
+            judging = false;
+            if (!r0.intersects(view) && !(r0.getWidth() == 0 || r0.getHeight() == 0)) continue;
             Rectangle2D r = rect(an);
-            if (!r.intersects(view) && !(r.getWidth() == 0 || r.getHeight() == 0)) continue;
             Element obj = objectOf(a);
             ctx.checkDeadline();
             try {
@@ -466,6 +476,15 @@ public final class DrawingPainter {
 
     /** 形状のパスを矩形 r に合わせて求める。 */
     static List<GeoPath> paths(CustomGeometry geom, Map<String, GuideIf> adj, Rectangle2D r) {
+        return paths(geom, adj, r, false);
+    }
+
+    /**
+     * 形状のパスを矩形 r に合わせて求める。
+     *
+     * @param custom custGeom か (w・h のないパスを図形の枠に広げる)
+     */
+    static List<GeoPath> paths(CustomGeometry geom, Map<String, GuideIf> adj, Rectangle2D r, boolean custom) {
         // POI の arcTo は、アンカーが原点でないと絶対座標とアンカー基準の座標を混ぜてしまうため、
         // (0,0,w,h) で評価してから実際の位置に動かす
         List<GeoPath> out = new ArrayList<>();
@@ -478,8 +497,18 @@ public final class DrawingPainter {
                 // パス独自の座標系 (<path w="5" h="5">。flowChart 系の標準図形) を図形の大きさに広げる。POI はこの拡大をしない
                 pt = new AffineTransform(at);
                 pt.scale(anchor.getWidth() / p.getW(), anchor.getHeight() / p.getH());
+            } else if (custom) {
+                // w・h のない custGeom のパス (LibreOffice などが書く): POI は座標をそのまま pt として返す (12203 なら 12203pt)。
+                // Excel は、座標の範囲 (0 から最大値) を図形の枠に広げて描く (角の丸い四角形が枠いっぱいに描かれる)
+                java.awt.geom.Rectangle2D b = p.getPath(c).getBounds2D();
+                if (b.getMaxX() > 0 && b.getMaxY() > 0) {
+                    pt = new AffineTransform(at);
+                    pt.scale(anchor.getWidth() / b.getMaxX(), anchor.getHeight() / b.getMaxY());
+                }
             }
             Path2D path = finiteOnly(new Path2D.Double(p.getPath(c), pt));
+            // Office は図形のパスを even-odd で塗る: 同じ向きの内側の輪郭も穴になり、自分と交差する星形の中央も塗らない
+            path.setWindingRule(Path2D.WIND_EVEN_ODD);
             out.add(new GeoPath(path, p.isFilled(), p.isStroked(), p.getFill()));
         }
         return out;
@@ -555,8 +584,6 @@ public final class DrawingPainter {
         double angle;
         /** 放射状のグラデーションか。 */
         boolean radial;
-        /** 図形と一緒に回転するか。 */
-        boolean rotWithShape = true;
         /** 画像の塗りつぶし。 */
         PDImageXObject image;
         /** 画像の切り取り {左, 上, 右, 下} (割合)。 */
@@ -1163,7 +1190,7 @@ public final class DrawingPainter {
         }
 
         Scene3D.View v3 = Scene3D.of(spPr, r);
-        List<GeoPath> paths = paths(geom, adj, r);
+        List<GeoPath> paths = paths(geom, adj, r, Xml.child(spPr, "custGeom") != null);
         if (v3 != null && v3.extruded() && fill != null) {
             // 奥行き (押し出し): 奥の面から手前へ、図形をずらしながら暗い色で重ねて塗る (側面)
             Element sp3d = Xml.child(spPr, "sp3d");
@@ -1281,7 +1308,7 @@ public final class DrawingPainter {
         }
     }
 
-    /** 文字の影の縁の濃さ (影の色の不透明度に対する割合)。exp51 wordart で 0.15・0.3・0.5 を試し 0.3 が最も合う。 */
+    /** 文字の影の縁の濃さ (影の色の不透明度に対する割合)。 */
     static final double TEXT_SHADOW_EDGE = 0.3;
 
     /** 文字の外側の影 (rPr の effectLst の outerShdw): 形 s をずらして、ぼかして塗る。 */
@@ -1302,9 +1329,9 @@ public final class DrawingPainter {
         for (int i = BLUR_STEPS; i >= 1; i--) cv.stroke(m, roundStroke(2 * blur * i / BLUR_STEPS), withAlpha(c, k));
     }
 
-    /** 影のぼかしのガウスの σ (blurRad に対する割合) と、ソフトエッジの σ (rad に対する割合)。exp64 の実測に合わせる。 */
+    /** 影のぼかしのガウスの σ (blurRad に対する割合) と、ソフトエッジの σ (rad に対する割合)。 */
     static final double BLUR_SIGMA = 0.5, SOFT_SIGMA = 0.35;
-    /** ソフトエッジで縮めない幅 (pt)。形を rad - SOFT_KEEP 縮めて σ = SOFT_SIGMA × rad でぼかす (exp64 の 5pt・25pt の断面に合う)。 */
+    /** ソフトエッジで縮めない幅 (pt)。形を rad - SOFT_KEEP 縮めて σ = SOFT_SIGMA × rad でぼかす。 */
     static final double SOFT_KEEP = 1.7;
     /** ぼかしの画像の解像度 (画素/pt) と画素数の上限。 */
     static final double BLUR_RES = 2.0;
@@ -1576,7 +1603,7 @@ public final class DrawingPainter {
         Map<String, GuideIf> adj = adjusts(spPr);
         cv.save();
         applyRotFlip(cv, r, rot, flipH, flipV);
-        List<GeoPath> paths = paths(geom, adj, r);
+        List<GeoPath> paths = paths(geom, adj, r, Xml.child(spPr, "custGeom") != null);
         Element prst = Xml.child(spPr, "prstGeom");
         boolean isRect = prst == null || "rect".equals(prst.getAttribute("prst"));
         // 画像の後ろの塗りつぶし (spPr の塗りつぶし)
