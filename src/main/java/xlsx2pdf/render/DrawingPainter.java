@@ -83,12 +83,16 @@ public final class DrawingPainter {
         long r0Off, c0Off, r1Off, c1Off, x, y, cx, cy;
         /** アンカーの種類 (twoCellAnchor, oneCellAnchor, absoluteAnchor)。 */
         String kind;
+        /** オブジェクトが graphicFrame (グラフ・SmartArt など) か。 */
+        boolean frame;
     }
 
     /** アンカー要素を解析する。 */
     private Anchor anchor(Element a) {
         Anchor an = new Anchor();
         an.kind = a.getLocalName();
+        Element ob = objectOf(a);
+        an.frame = ob != null && "graphicFrame".equals(ob.getLocalName());
         Element from = Xml.child(a, "from"), to = Xml.child(a, "to");
         if (from != null) {
             an.c0 = (int) Xml.longAttr(Xml.child(from, "col"), "_", 0);
@@ -109,18 +113,33 @@ public final class DrawingPainter {
         return an;
     }
 
+    /**
+     * セルの中のオフセット (EMU) の pt。図形・画像は、Excel と同じく画面の画素 (914400 / 画面 DPI EMU) に切り捨てる
+     * (外部の報告: oneCellAnchor の colOff 3.68px・rowOff 11.64px は 3px・11px の位置に描かれる。excel-local の図形の試験 44 件 0.9739 → 0.9768)。
+     * グラフなどの graphicFrame は切り捨てない (切り捨てると試験の上下が同じくらい出る。グラフの規則は別)。
+     */
+    private double pxFloor(long off) {
+        if (curFrame) return off / EMU;
+        double emuPx = 914400.0 / L.screenDpi();
+        return Math.floor(off / emuPx + 1e-9) * emuPx / EMU;
+    }
+
     /** 列 c からオフセット (EMU) の位置 (シートの pt。オフセットは列幅を超えない)。 */
     private double colPos(int c, long off) {
-        return L.x(c) + Math.min(off / EMU * L.xScale, L.cw(c));
+        return L.x(c) + Math.min(pxFloor(off) * L.xScale, L.cw(c));
     }
 
     /** 行 r からオフセット (EMU) の位置 (シートの pt。オフセットは行高を超えない)。 */
     private double rowPos(int r, long off) {
-        return L.y(r) + Math.min(off / EMU * L.yScale, L.rh(r));
+        return L.y(r) + Math.min(pxFloor(off) * L.yScale, L.rh(r));
     }
 
     /** アンカーの矩形 (シートの pt)。 */
+    /** 今計算しているアンカーのオブジェクトが graphicFrame か ({@link #pxFloor})。 */
+    private boolean curFrame;
+
     private Rectangle2D rect(Anchor a) {
+        curFrame = a.frame;
         switch (a.kind) {
             case "twoCellAnchor" -> {
                 double x0 = colPos(a.c0, a.c0Off), y0 = rowPos(a.r0, a.r0Off);
@@ -415,7 +434,11 @@ public final class DrawingPainter {
         Element cust = Xml.child(spPr, "custGeom");
         if (cust != null) {
             try {
-                CTCustomGeometry2D ct = CTCustomGeometry2D.Factory.parse(cust);
+                // DOM の要素をそのまま渡すと、XMLBeans は文書の要素として読み、中身 (gdLst・pathLst) が空になる。
+                // setLoadReplaceDocumentElement(null) で、要素を型の中身として読ませる
+                org.apache.xmlbeans.XmlOptions o = new org.apache.xmlbeans.XmlOptions();
+                o.setLoadReplaceDocumentElement(null);
+                CTCustomGeometry2D ct = CTCustomGeometry2D.Factory.parse(cust, o);
                 return XSLFCustomGeometry.convertCustomGeometry(ct);
             } catch (Exception e) {
                 return PresetGeometries.getInstance().get("rect");

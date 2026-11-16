@@ -89,6 +89,9 @@ public final class SheetLayout {
     private int inferredDpi = 96;
     /** 指定された出力環境の画面 DPI (0 = 推定する)。 */
     private final int screenDpi;
+
+    /** 画面の DPI (推定できないときは 96)。 */
+    public int screenDpi() { return screenDpi > 0 ? screenDpi : 96; }
     /** authorDpi での最大数字幅と標準行高 (px)。 */
     private int authorMdw, authorRow;
 
