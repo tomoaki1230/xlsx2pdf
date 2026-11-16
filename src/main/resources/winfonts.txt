@@ -1,0 +1,421 @@
+# この PC (Windows 11 + Office 2024 日本語版) にある書体名 (日本語名と英語名、正規化済み)。FontManager.installed が使う
+agency fb
+alef
+algerian
+amiri
+amiri quran
+arial
+arial black
+arial narrow
+arial rounded mt bold
+bahnschrift
+bahnschrift condensed
+bahnschrift light
+bahnschrift light condensed
+bahnschrift light semicondensed
+bahnschrift semibold
+bahnschrift semibold condensed
+bahnschrift semibold semiconden
+bahnschrift semicondensed
+bahnschrift semilight
+bahnschrift semilight condensed
+bahnschrift semilight semiconde
+baskerville old face
+bauhaus 93
+bell mt
+berlin sans fb
+berlin sans fb demi
+bernard mt condensed
+biz udgothic
+biz udmincho medium
+biz udpgothic
+biz udpmincho medium
+biz udpゴシック
+biz udp明朝 medium
+biz udゴシック
+biz ud明朝 medium
+blackadder itc
+bodoni mt
+bodoni mt black
+bodoni mt condensed
+bodoni mt poster compressed
+book antiqua
+bookman old style
+bookshelf symbol 7
+bradley hand itc
+britannic bold
+broadway
+brush script mt
+caladea
+calibri
+calibri light
+californian fb
+calisto mt
+cambria
+cambria math
+candara
+candara light
+carlito
+cascadia code
+cascadia code extralight
+cascadia code light
+cascadia code semibold
+cascadia code semilight
+cascadia mono
+cascadia mono extralight
+cascadia mono light
+cascadia mono semibold
+cascadia mono semilight
+castellar
+centaur
+century
+century gothic
+century schoolbook
+chiller
+colonna mt
+comic sans ms
+consolas
+constantia
+cooper black
+copperplate gothic bold
+copperplate gothic light
+corbel
+corbel light
+courier new
+curlz mt
+david clm
+david libre
+dejavu math tex gyre
+dejavu sans
+dejavu sans condensed
+dejavu sans light
+dejavu sans mono
+dejavu serif
+dejavu serif condensed
+dubai
+dubai light
+dubai medium
+ebrima
+edwardian script itc
+elephant
+engravers mt
+eras bold itc
+eras demi itc
+eras light itc
+eras medium itc
+felix titling
+footlight mt light
+forte
+frank ruehl clm
+frank ruhl hofshi
+franklin gothic book
+franklin gothic demi
+franklin gothic demi cond
+franklin gothic heavy
+franklin gothic medium
+franklin gothic medium cond
+freestyle script
+french script mt
+gabriola
+gadugi
+garamond
+gentium basic
+gentium book basic
+georgia
+gigi
+gill sans mt
+gill sans mt condensed
+gill sans mt ext condensed bold
+gill sans ultra bold
+gill sans ultra bold condensed
+gloucester mt extra condensed
+goudy old style
+goudy stout
+haettenschweiler
+harlow solid italic
+harrington
+hggothice
+hggothicm
+hggyoshotai
+hgkyokashotai
+hgmarugothicmpro
+hgminchob
+hgminchoe
+hgpgothice
+hgpgothicm
+hgpgyoshotai
+hgpkyokashotai
+hgpminchob
+hgpminchoe
+hgpsoeikakugothicub
+hgpsoeikakupoptai
+hgpsoeipresenceeb
+hgp創英角ｺﾞｼｯｸub
+hgp創英角ﾎﾟｯﾌﾟ体
+hgp創英ﾌﾟﾚｾﾞﾝｽeb
+hgp教科書体
+hgp明朝b
+hgp明朝e
+hgp行書体
+hgpｺﾞｼｯｸe
+hgpｺﾞｼｯｸm
+hgseikaishotaipro
+hgsgothice
+hgsgothicm
+hgsgyoshotai
+hgskyokashotai
+hgsminchob
+hgsminchoe
+hgsoeikakugothicub
+hgsoeikakupoptai
+hgsoeipresenceeb
+hgssoeikakugothicub
+hgssoeikakupoptai
+hgssoeipresenceeb
+hgs創英角ｺﾞｼｯｸub
+hgs創英角ﾎﾟｯﾌﾟ体
+hgs創英ﾌﾟﾚｾﾞﾝｽeb
+hgs教科書体
+hgs明朝b
+hgs明朝e
+hgs行書体
+hgsｺﾞｼｯｸe
+hgsｺﾞｼｯｸm
+hg丸ｺﾞｼｯｸm-pro
+hg創英角ｺﾞｼｯｸub
+hg創英角ﾎﾟｯﾌﾟ体
+hg創英ﾌﾟﾚｾﾞﾝｽeb
+hg教科書体
+hg明朝b
+hg明朝e
+hg正楷書体-pro
+hg行書体
+hgｺﾞｼｯｸe
+hgｺﾞｼｯｸm
+high tower text
+hp simplified
+hp simplified hans
+hp simplified hans light
+hp simplified jpan
+hp simplified jpan light
+hp simplified light
+impact
+imprint mt shadow
+informal roman
+ink free
+javanese text
+jokerman
+juice itc
+kristen itc
+kunstler script
+leelawadee
+leelawadee ui
+leelawadee ui semilight
+liberation mono
+liberation sans
+liberation sans narrow
+liberation serif
+linux biolinum g
+linux libertine display g
+linux libertine g
+lucida bright
+lucida calligraphy
+lucida console
+lucida fax
+lucida handwriting
+lucida sans
+lucida sans typewriter
+lucida sans unicode
+magneto
+maiandra gd
+malgun gothic
+malgun gothic semilight
+marlett
+matura mt script capitals
+meiryo
+meiryo ui
+microsoft himalaya
+microsoft jhenghei
+microsoft jhenghei light
+microsoft jhenghei ui
+microsoft jhenghei ui light
+microsoft new tai lue
+microsoft phagspa
+microsoft sans serif
+microsoft tai le
+microsoft uighur
+microsoft yahei
+microsoft yahei light
+microsoft yahei ui
+microsoft yahei ui light
+microsoft yi baiti
+mingliu-extb
+mingliu_hkscs-extb
+mingliu_mscs-extb
+miriam clm
+miriam libre
+miriam mono clm
+mistral
+modern no. 20
+mongolian baiti
+monotype corsiva
+ms gothic
+ms mincho
+ms outlook
+ms pgothic
+ms pmincho
+ms pゴシック
+ms p明朝
+ms reference sans serif
+ms reference specialty
+ms ui gothic
+ms ゴシック
+ms 明朝
+mt extra
+mv boli
+myanmar text
+nachlieli clm
+niagara engraved
+niagara solid
+nirmala text
+nirmala text semilight
+nirmala ui
+nirmala ui semilight
+noto kufi arabic
+noto naskh arabic
+noto sans
+noto sans arabic
+noto sans armenian
+noto sans georgian
+noto sans georgian bold
+noto sans hebrew
+noto sans jp
+noto sans jp black
+noto sans jp demilight
+noto sans jp light
+noto sans jp medium
+noto sans jp thin
+noto sans lao
+noto sans lisu
+noto serif
+noto serif armenian
+noto serif georgian
+noto serif hebrew
+noto serif jp
+noto serif jp black
+noto serif jp extralight
+noto serif jp light
+noto serif jp medium
+noto serif jp semibold
+noto serif lao
+nsimsun
+ocr a extended
+ocrb
+old english text mt
+onyx
+opensymbol
+palace script mt
+palatino linotype
+papyrus
+parchment
+perpetua
+perpetua titling mt
+playbill
+pmingliu-extb
+poor richard
+pristina
+rage italic
+ravie
+reem kufi
+reem kufi medium
+reem kufi semibold
+rockwell
+rockwell condensed
+rockwell extra bold
+rubik
+sans serif collection
+scheherazade
+script mt bold
+segoe fluent icons
+segoe mdl2 assets
+segoe print
+segoe script
+segoe ui
+segoe ui black
+segoe ui emoji
+segoe ui historic
+segoe ui light
+segoe ui semibold
+segoe ui semilight
+segoe ui symbol
+segoe ui variable display
+segoe ui variable display light
+segoe ui variable display semib
+segoe ui variable display semil
+segoe ui variable small
+segoe ui variable small light
+segoe ui variable small semibol
+segoe ui variable small semilig
+segoe ui variable text
+segoe ui variable text light
+segoe ui variable text semibold
+segoe ui variable text semiligh
+showcard gothic
+simsun
+simsun-extb
+simsun-extg
+sitka banner
+sitka banner semibold
+sitka display
+sitka display semibold
+sitka heading
+sitka heading semibold
+sitka small
+sitka small semibold
+sitka subheading
+sitka subheading semibold
+sitka text
+sitka text semibold
+snap itc
+stencil
+sylfaen
+symbol
+tahoma
+tempus sans itc
+times new roman
+trebuchet ms
+tw cen mt
+tw cen mt condensed
+tw cen mt condensed extra bold
+ud digi kyokasho n
+ud digi kyokasho nk
+ud digi kyokasho np
+ud デジタル 教科書体 n
+ud デジタル 教科書体 nk
+ud デジタル 教科書体 np
+verdana
+viner hand itc
+vivaldi
+vladimir script
+webdings
+wide latin
+wingdings
+wingdings 2
+wingdings 3
+yu gothic
+yu gothic light
+yu gothic medium
+yu gothic ui
+yu gothic ui light
+yu gothic ui semibold
+yu gothic ui semilight
+yu mincho
+yu mincho demibold
+yu mincho light
+メイリオ
+游ゴシック
+游ゴシック light
+游ゴシック medium
+游明朝
+游明朝 demibold
+游明朝 light

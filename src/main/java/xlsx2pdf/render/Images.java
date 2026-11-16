@@ -76,10 +76,38 @@ public final class Images {
     public static boolean isMetafile(byte[] data, String name) {
         String n = name == null ? "" : name.toLowerCase(Locale.ROOT);
         if (n.endsWith(".emf") || n.endsWith(".wmf") || n.endsWith(".emz") || n.endsWith(".wmz")) return true;
+        if (isGzip(data)) {
+            byte[] u = gunzip(data);
+            return u != data && isMetafile(u, null);
+        }
         if (data.length > 44 && data[0] == 1 && data[1] == 0 && data[2] == 0 && data[3] == 0 && isEmf(data)) return true;
         // 配置可能 WMF のマジックナンバー D7 CD C6 9A
         return data.length > 4 && (data[0] & 255) == 0xD7 && (data[1] & 255) == 0xCD && (data[2] & 255) == 0xC6
                 && (data[3] & 255) == 0x9A;
+    }
+
+    /** gzip のマジックナンバー 1F 8B を持つか (EMZ・WMZ)。 */
+    static boolean isGzip(byte[] data) {
+        return data.length > 2 && (data[0] & 255) == 0x1F && (data[1] & 255) == 0x8B;
+    }
+
+    /** 展開後の大きさの上限 (バイト)。 */
+    private static final int GUNZIP_MAX = 256 << 20;
+
+    /** gzip で圧縮されていれば展開する (EMZ・WMZ)。圧縮されていない・展開できなければそのまま返す。 */
+    static byte[] gunzip(byte[] data) {
+        if (!isGzip(data)) return data;
+        try (java.util.zip.GZIPInputStream in = new java.util.zip.GZIPInputStream(new ByteArrayInputStream(data));
+             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
+            byte[] buf = new byte[65536];
+            for (int n; (n = in.read(buf)) > 0; ) {
+                out.write(buf, 0, n);
+                if (out.size() > GUNZIP_MAX) return data;
+            }
+            return out.toByteArray();
+        } catch (IOException e) {
+            return data;
+        }
     }
 
     /** EMF ヘッダーのシグネチャ (オフセット 40 の " EMF") を持つか。 */
@@ -108,7 +136,10 @@ public final class Images {
             } else if (data.length > 3 && (data[0] & 255) == 0xFF && (data[1] & 255) == 0xD8) {
                 // JPEG はそのまま埋め込む。PDFBox が読めない JPEG (CMYK など) は RGB に変換して埋め込み直す
                 int[] wh = headerSize(data);
-                if (wh != null && !pixelsAllowed(wh[0], wh[1])) return null;
+                if (wh != null && !pixelsAllowed(wh[0], wh[1])) {
+                    Warnings.add("画像「" + name + "」は画素数の上限を超えるため描きませんでした", null);
+                    return null;
+                }
                 try {
                     img = JPEGFactory.createFromByteArray(ctx.doc, data);
                 } catch (IOException | RuntimeException e) {
@@ -120,6 +151,7 @@ public final class Images {
                 if (bi != null) img = LosslessFactory.createFromImage(ctx.doc, bi);
             }
         } catch (IOException | RuntimeException e) {
+            Warnings.add("画像「" + name + "」を変換できませんでした", e);
             img = null;
         }
         if (img != null) ctx.images.put(key, img);
@@ -150,6 +182,7 @@ public final class Images {
      * @return 画像。描画に失敗したら null
      */
     static BufferedImage renderMetafile(byte[] data, String name, double wPt, double hPt, FontManager fonts) throws IOException {
+        data = gunzip(data); // EMZ・WMZ
         int w = (int) Math.max(1, Math.min(METAFILE_MAX_PX, Math.round(wPt / 72 * METAFILE_DPI)));
         int h = (int) Math.max(1, Math.min(METAFILE_MAX_PX, Math.round(hPt / 72 * METAFILE_DPI)));
         BufferedImage bi = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);

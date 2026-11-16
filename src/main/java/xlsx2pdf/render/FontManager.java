@@ -57,10 +57,20 @@ public final class FontManager {
             }
             this.ascent = a / unitsPerEm;
             this.descent = d / unitsPerEm;
+            var os2 = ttf.getOS2Windows();
+            this.useTypo = os2 != null && (os2.getFsSelection() & 128) != 0 && os2.getTypoAscender() > 0;
+            this.typoAscent = useTypo ? os2.getTypoAscender() / (float) unitsPerEm : ascent;
+            this.typoDescent = useTypo ? -os2.getTypoDescender() / (float) unitsPerEm : descent;
         }
+
+        /** OS/2 の fsSelection の USE_TYPO_METRICS (bit 7) が立っているか。図形の文字の行の高さは typo の値 (Aptos など)。 */
+        public final boolean useTypo;
+        /** 図形の文字の行のアセント・ディセント (em。USE_TYPO_METRICS なら typo、なければ win の値)。 */
+        public final float typoAscent, typoDescent;
 
         /** コードポイントのグリフを持つか。 */
         public boolean hasGlyph(int cp) {
+            if (ComplexText.isCluster(cp)) cp = ComplexText.firstCp(cp);
             try {
                 return ttf.getUnicodeCmapLookup().getGlyphId(cp) > 0;
             } catch (IOException e) {
@@ -70,12 +80,44 @@ public final class FontManager {
 
         /** 送り幅 (em)。 */
         public float advance(int cp) {
+            if (ComplexText.isCluster(cp)) return shaped(cp).adv;
             try {
                 int gid = ttf.getUnicodeCmapLookup().getGlyphId(cp);
                 return ttf.getAdvanceWidth(gid) / unitsPerEm;
             } catch (IOException e) {
                 return 0.5f;
             }
+        }
+    
+        /** AWT の書体の元 (複雑な文字体系の整形に使う。{@link ComplexText})。システムフォントはファイルと PostScript 名、同梱フォントは中身。 */
+        java.io.File awtFile;
+        String awtPs;
+        byte[] awtData;
+        private java.awt.Font awt;
+        private boolean awtTried;
+        private final Map<Integer, ComplexText.Shaped> shaped = new java.util.concurrent.ConcurrentHashMap<>();
+
+        /** 整形に使う AWT の書体 (作れなければ null)。 */
+        synchronized java.awt.Font awtFont() {
+            if (awtTried) return awt;
+            awtTried = true;
+            try {
+                if (awtFile != null) {
+                    java.awt.Font[] fs = java.awt.Font.createFonts(awtFile);
+                    for (java.awt.Font f : fs) if (awtPs == null || awtPs.equals(f.getPSName())) { awt = f; break; }
+                    if (awt == null && fs.length > 0) awt = fs[0];
+                } else if (awtData != null) {
+                    awt = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, new java.io.ByteArrayInputStream(awtData));
+                }
+            } catch (java.awt.FontFormatException | IOException | RuntimeException e) {
+                awt = null;
+            }
+            return awt;
+        }
+
+        /** 複雑な文字体系のまとまりを整形した結果 (送り幅と輪郭)。 */
+        public ComplexText.Shaped shaped(int cp) {
+            return shaped.computeIfAbsent(cp, k -> ComplexText.shape(this, k));
         }
     }
 
@@ -93,6 +135,18 @@ public final class FontManager {
         public final float descent;
         /** 要求されたフォント名。 */
         public final String requested;
+        /**
+         * 図形の文字で、CJK の文字のない行に使うアセント・ディセント (em)。欧文の書体だけの値 (和文の書体を混ぜない。
+         * USE_TYPO_METRICS の書体は typo の値)。Excel の印刷の実測 exp63 (Aptos Narrow 11pt の行送り 13.44pt)。
+         */
+        public float textAscent, textDescent;
+        /**
+         * 図形の文字の 1 行の基線より上・下 (em。Excel の実測 fb-tb: 20 書体 × 12・20pt)。和文の書体は高さが
+         * (winAscent + winDescent) × 1.3 で、余りの 0.3 は上下に半分ずつ。欧文の書体は hhea のアセント + lineGap が上、ディセントが下。
+         */
+        public float lineAsc, lineDesc;
+        /** 和文の書体か (ひらがなを持つ)。 */
+        public boolean eaFont;
 
         Spec(Face face, Face eaFace, boolean bold, boolean italic, float ascent, float descent, String requested) {
             this.face = face;
@@ -102,6 +156,10 @@ public final class FontManager {
             this.ascent = ascent;
             this.descent = descent;
             this.requested = requested;
+            this.textAscent = ascent;
+            this.textDescent = descent;
+            this.lineAsc = ascent;
+            this.lineDesc = descent;
         }
 
         /** 行の高さ (em)。 */
@@ -112,6 +170,30 @@ public final class FontManager {
 
         /** 書体 f で斜体を合成するか。 */
         public boolean synthItalic(Face f) { return italic && !f.italic; }
+
+        /**
+         * 字形の輪郭 (基線の原点、y は下向き、pt)。送り幅を adv[0] に入れる。輪郭が取れなければ null。
+         */
+        public java.awt.geom.Path2D outline(int cp, float size, FontManager fm, double[] adv) {
+            Face f = faceFor(cp, fm);
+            if (ComplexText.isCluster(cp)) {
+                ComplexText.Shaped sh = f.shaped(cp);
+                adv[0] = sh.adv * size;
+                return new java.awt.geom.Path2D.Double(sh.path, java.awt.geom.AffineTransform.getScaleInstance(size, size));
+            }
+            try {
+                var cmap = f.ttf.getUnicodeCmapLookup();
+                int gid = cmap == null ? 0 : cmap.getGlyphId(cp);
+                double k = size / f.unitsPerEm;
+                adv[0] = f.ttf.getAdvanceWidth(gid) * k;
+                var gd = f.ttf.getGlyph() == null ? null : f.ttf.getGlyph().getGlyph(gid);
+                if (gd == null) return new java.awt.geom.Path2D.Double();
+                java.awt.geom.AffineTransform at = new java.awt.geom.AffineTransform(k, 0, 0, -k, 0, 0);
+                return new java.awt.geom.Path2D.Double(gd.getPath(), at);
+            } catch (IOException | RuntimeException e) {
+                return null;
+            }
+        }
 
         /** コードポイントを描く書体 (主 → CJK → 予備の順。どれにもなければ主)。 */
         public Face faceFor(int cp, FontManager fm) {
@@ -141,6 +223,7 @@ public final class FontManager {
 
         /** 文字列の幅 (pt)。 */
         public float width(String s, float size, FontManager fm) {
+            s = ComplexText.cluster(s);
             float w = 0;
             for (int i = 0; i < s.length(); ) {
                 int cp = s.codePointAt(i);
@@ -153,6 +236,9 @@ public final class FontManager {
         /** 1 文字の送り幅 (pt。合成太字とピクセル格子への吸着を含む)。 */
         public float charWidth(int cp, float size, FontManager fm) {
             if (cp == '\n' || cp == '\r') return 0;
+            // 数字幅の空白 (分数の ? の空き): そのフォントの数字の幅 (U+2007 の字形がないフォントでも。Excel の印刷 exp91 の ＭＳ Ｐゴシック)
+            if (cp == 0x2007) return charWidth('0', size, fm);
+            if (isPad(cp)) return charWidth(cp - PAD_BASE, size, fm);
             Face f = faceFor(cp, fm);
             float adv = f.advance(cp);
             boolean synth = synthBold(f);
@@ -170,6 +256,14 @@ public final class FontManager {
             }
             return (float) (snap(adv * size) + extra);
         }
+    }
+
+    /** 表示形式の「_x」の空白を表す私用の文字の始まり (U+E000 + x。描かない)。 */
+    public static final int PAD_BASE = 0xE000;
+
+    /** 表示形式の「_x」の空白か。 */
+    public static boolean isPad(int cp) {
+        return cp >= PAD_BASE && cp < PAD_BASE + 0x100;
     }
 
     // ---- よく使う Excel のフォントの元の寸法 (winAscent/winDescent、em) ----
@@ -225,6 +319,12 @@ public final class FontManager {
 
     /** 格子への吸着を終える。 */
     public static void clearGrid() { GRID.remove(); }
+
+    /** 今の格子の単位 (吸着していなければ 0)。入れ子で設定するときに、元の値を戻すために使う。 */
+    public static double gridUnit() {
+        double[] g = GRID.get();
+        return g == null ? 0 : g[0];
+    }
 
     /** 送り幅を現在のデバイスピクセル格子に丸める (GDI はグリフごとに送り幅を整数ピクセルに丸める)。 */
     public static float snap(float w) {
@@ -311,6 +411,22 @@ public final class FontManager {
      * @param extraDirs 追加で検索するフォルダ (システムより優先)
      */
     public FontManager(PDDocument doc, List<File> extraDirs) {
+        this(doc, extraDirs, defaultCacheDir());
+    }
+
+    /** フォントの走査結果のキャッシュの既定のフォルダ (~/.cache/xlsx2pdf)。 */
+    public static File defaultCacheDir() {
+        return new File(System.getProperty("user.home"), ".cache/xlsx2pdf");
+    }
+
+    /**
+     * フォントを検索する準備をする (システムと指定のフォルダを走査する)。
+     *
+     * @param doc       フォントを埋め込む PDF
+     * @param extraDirs 追加で検索するフォルダ (システムより優先)
+     * @param cacheDir  走査結果のキャッシュ (fonts-*.tsv) を置くフォルダ。null ならキャッシュを読まず、書かない
+     */
+    public FontManager(PDDocument doc, List<File> extraDirs, File cacheDir) {
         this.doc = doc;
         List<File> dirs = new ArrayList<>(extraDirs);
         String home = System.getProperty("user.home");
@@ -335,7 +451,7 @@ public final class FontManager {
         dirs.add(new File(home, ".fonts"));
         dirs.add(new File(home, ".local/share/fonts"));
         for (File d : dirs) {
-            Map<String, Map<Integer, Loc>> found = SCAN_CACHE.computeIfAbsent(d.getAbsolutePath(), k -> scanCached(d));
+            Map<String, Map<Integer, Loc>> found = SCAN_CACHE.computeIfAbsent(d.getAbsolutePath(), k -> scanCached(d, cacheDir));
             for (var e : found.entrySet()) {
                 Map<Integer, Loc> t = systemFonts.computeIfAbsent(e.getKey(), x -> new HashMap<>());
                 for (var st : e.getValue().entrySet()) t.putIfAbsent(st.getKey(), st.getValue());
@@ -395,7 +511,7 @@ public final class FontManager {
                     if (loc.psName == null || !loc.psName.replace("-", "").replace(" ", "").toLowerCase(Locale.ROOT).equals(want)) continue;
                     try {
                         if (loc.collection) {
-                            TrueTypeCollection c = new TrueTypeCollection(loc.file);
+                            TrueTypeCollection c = new TrueTypeCollection(new java.io.ByteArrayInputStream(java.nio.file.Files.readAllBytes(loc.file.toPath())));
                             TrueTypeFont t = c.getFontByName(loc.psName);
                             if (t != null) return t;
                         } else {
@@ -437,19 +553,19 @@ public final class FontManager {
     private static final Map<String, Map<String, Map<Integer, Loc>>> SCAN_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * フォントフォルダを走査する。大きさと更新日時が変わっていないファイルは ~/.cache/xlsx2pdf/fonts-*.tsv を再利用する
+     * フォントフォルダを走査する。大きさと更新日時が変わっていないファイルは cacheDir/fonts-*.tsv を再利用する (cacheDir が null なら使わない)
      * (WSL の /mnt/c のような遅いマウントですべてのフォントを読むと数十秒かかる)。
      */
-    private static Map<String, Map<Integer, Loc>> scanCached(File dir) {
+    private static Map<String, Map<Integer, Loc>> scanCached(File dir, File cacheDir) {
         Map<String, Map<Integer, Loc>> out = new HashMap<>();
         if (!dir.isDirectory()) return out;
-        File cache = new File(System.getProperty("user.home"), ".cache/xlsx2pdf/fonts-"
-                + Integer.toHexString(dir.getAbsolutePath().hashCode()) + ".tsv");
+        File cache = cacheDir == null ? null
+                : new File(cacheDir, "fonts-" + Integer.toHexString(dir.getAbsolutePath().hashCode()) + ".tsv");
         // ファイル → "大きさ\t更新日時" と、その中の書体 (ファミリ、スタイル、PostScript 名、コレクションか)
         Map<String, String> stamp = new HashMap<>();
         Map<String, List<String[]>> entries = new HashMap<>();
         try {
-            if (cache.isFile()) {
+            if (cache != null && cache.isFile()) {
                 for (String l : java.nio.file.Files.readAllLines(cache.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
                     String[] p = l.split("\t", -1);
                     if (p.length < 7) continue;
@@ -484,7 +600,7 @@ public final class FontManager {
                 if (style >= 0) out.computeIfAbsent(e[0], x -> new HashMap<>()).putIfAbsent(style, new Loc(f, e[2], Boolean.parseBoolean(e[3])));
             }
         }
-        if (changed || files.size() != stamp.size()) {
+        if (cache != null && (changed || files.size() != stamp.size())) {
             try {
                 cache.getParentFile().mkdirs();
                 File tmp = new File(cache.getPath() + "." + ProcessHandle.current().pid());
@@ -565,12 +681,77 @@ public final class FontManager {
         String n = sb.toString().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
         // Windows が置き換える古い和文フォント名 (FontSubstitutes): 明朝 → ＭＳ Ｐ明朝、ゴシック → ＭＳ ゴシック
         String alias = LEGACY_ALIAS.get(n);
+        if (alias == null && OSAKA_ALIAS != null && n.equals("osaka")) alias = OSAKA_ALIAS;
         return alias != null ? alias : n;
     }
 
+    /** 別名の置き換えをしない正規化 (小文字、全角英数を半角、空白をまとめる)。 */
+    static String rawNorm(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : s.toCharArray()) {
+            if (c >= '\uFF01' && c <= '\uFF5E') c = (char) (c - 0xFEE0);
+            if (c == '\u3000') c = ' ';
+            sb.append(c);
+        }
+        return sb.toString().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+    }
+
+    /**
+     * Windows (この PC の Excel の環境) にある書体名か。fontmetrics.tsv・screenrows.tsv にある名前、Windows の FontSubstitutes の名前、
+     * フルネーム (ファミリー名 + スタイル: 「UD デジタル 教科書体 NK-R」など) をあるとみなす (Fableレポート A)。
+     */
+    public static boolean installed(String name) {
+        if (name == null) return false;
+        String n = rawNorm(name);
+        if (n.startsWith("@")) n = n.substring(1);
+        if (GDI.containsKey(n) || WIN_SUBST.contains(n) || WIN_FONTS.contains(n) || CLOUD_FONTS.contains(n)) return true;
+        for (String k : GDI.keySet())
+            if (n.length() > k.length() + 1 && n.startsWith(k) && (n.charAt(k.length()) == '-' || n.charAt(k.length()) == ' ')) return true;
+        return false;
+    }
+
+    /**
+     * ファミリー名ではなく、スタイル付きの名前 (「UD デジタル 教科書体 NK-R」など) でだけ見つかる書体名か。
+     * Excel は、この形の名前を charset の指定がなく family の指定があるときには見つけられない (試験 fb3-b1 ud_*: family 1・charset なしは
+     * Times New Roman + ＭＳ 明朝、charset 128 か family なしなら UD デジタル 教科書体 NK-R。夜間 n4795 の JUST Calc のブック)。
+     */
+    public static boolean fullNameOnly(String name) {
+        if (name == null) return false;
+        String n = rawNorm(name);
+        if (n.startsWith("@")) n = n.substring(1);
+        if (GDI.containsKey(n) || WIN_SUBST.contains(n) || WIN_FONTS.contains(n) || CLOUD_FONTS.contains(n)) return false;
+        return installed(name);
+    }
+
+    /** Office のクラウドフォント (Windows にはないが Excel が取得して使う。exp9c・exp20・exp37)。 */
+    private static final java.util.Set<String> CLOUD_FONTS = java.util.Set.of("aptos", "aptos narrow", "aptos display", "seaford");
+
+    /**
+     * Windows + Office にある書体名 (winfonts.txt。日本語名と英語名)。画面の行の表 (screenrows.tsv) には、ない書体を Excel が
+     * 置き換えた結果の行 (IPA Pゴシック・ＭＳゴシックなど) も入っているので、判定には使わない (Fableレポート2 の 1)。
+     */
+    private static final java.util.Set<String> WIN_FONTS = new java.util.HashSet<>();
+    static {
+        try (var in = FontManager.class.getResourceAsStream("/winfonts.txt")) {
+            if (in != null)
+                for (String l : new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).split("\n"))
+                    if (!l.startsWith("#") && !l.isBlank()) WIN_FONTS.add(l.trim());
+        } catch (java.io.IOException e) {
+            // 表がなければ寸法の表だけで判定する
+        }
+    }
+
+    /** Windows の FontSubstitutes にある名前 (charset・family によらず置き換わる)。 */
+    private static final java.util.Set<String> WIN_SUBST = java.util.Set.of("ゴシック", "helvetica", "helv", "tms rmn",
+            "times", "courier", "ms shell dlg", "ms shell dlg 2", "ms sans serif", "ms serif");
+
+    /** Mac の Osaka を Windows で置き換える書体 (日本語の等幅系 → ＭＳ ゴシック。夜間 a0b3d2faad の 5 件など)。 */
+    static final String OSAKA_ALIAS = "ms ゴシック";
+
     /** 古い和文フォント名の別名と、空白の抜けた表記。 */
-    private static final Map<String, String> LEGACY_ALIAS = Map.of("明朝", "ms p明朝", "ゴシック", "ms ゴシック",
-            "mspゴシック", "ms pゴシック", "msゴシック", "ms ゴシック", "msp明朝", "ms p明朝", "ms明朝", "ms 明朝");
+    private static final Map<String, String> LEGACY_ALIAS = Map.ofEntries(Map.entry("明朝", "ms p明朝"), Map.entry("ゴシック", "ms ゴシック"),
+            Map.entry("mspゴシック", "ms pゴシック"), Map.entry("msゴシック", "ms ゴシック"), Map.entry("msp明朝", "ms p明朝"),
+            Map.entry("ms明朝", "ms 明朝"), Map.entry("helvetica", "arial"), Map.entry("helv", "arial"));
 
     /** 元のフォントの寸法 {アセント, ディセント} (em)。表になければ null。 */
     private static float[] metricsFor(String name) {
@@ -596,13 +777,15 @@ public final class FontManager {
         try {
             TrueTypeFont t;
             if (loc.collection) {
-                TrueTypeCollection c = new TrueTypeCollection(loc.file);
+                TrueTypeCollection c = new TrueTypeCollection(new java.io.ByteArrayInputStream(java.nio.file.Files.readAllBytes(loc.file.toPath())));
                 t = c.getFontByName(loc.psName);
             } else {
                 t = new TTFParser().parse(new RandomAccessReadBuffer(java.nio.file.Files.readAllBytes(loc.file.toPath())));
             }
             if (t == null) return null;
             f = new Face(key, t);
+            f.awtFile = loc.file;
+            f.awtPs = loc.psName;
             faces.put(key, f);
             return f;
         } catch (IOException e) {
@@ -621,8 +804,10 @@ public final class FontManager {
         if (f != null) return f;
         try (InputStream in = FontManager.class.getResourceAsStream("/fonts/" + file)) {
             if (in != null) {
-                TrueTypeFont t = new TTFParser().parse(new RandomAccessReadBuffer(in.readAllBytes()));
+                byte[] data = in.readAllBytes();
+                TrueTypeFont t = new TTFParser().parse(new RandomAccessReadBuffer(data));
                 f = new Face(file.replace(".ttf", ""), t);
+                f.awtData = data;
                 faces.put(file, f);
                 return f;
             }
@@ -697,7 +882,12 @@ public final class FontManager {
 
     /** 書体を PDF に埋め込む (サブセット。初回だけ)。 */
     public PDType0Font pdfFont(Face f) throws IOException {
-        if (f.pdf == null) f.pdf = PDType0Font.load(doc, f.ttf, true);
+        if (f.pdf == null) {
+            // GSUB (合字など) は使わない: Excel はセルの文字に合字を使わず、PDFBox の Latin の GSUB は
+            // 文字列ごとに正規表現を作り直すので、文字の多いシートで極端に遅くなる (夜間 n1313 で 5 分超)
+            f.ttf.setEnableGsub(false);
+            f.pdf = PDType0Font.load(doc, f.ttf, true);
+        }
         return f.pdf;
     }
 
@@ -778,9 +968,33 @@ public final class FontManager {
         float asc = m != null ? m[0] : face.ascent;
         float desc = m != null ? m[1] : face.descent;
         s = new Spec(face, ea, bold, italic, asc, desc, name);
+        if (face.useTypo) { s.textAscent = face.typoAscent; s.textDescent = face.typoDescent; }
+        s.eaFont = sub.startsWith("ipa") || face.hasGlyph(0x3042);
+        if (s.eaFont) {
+            // 実フォントがあれば OS/2 の winAscent・winDescent (游ゴシック 0.985 + 0.302、メイリオ 1.06 + 0.44)。なければ寸法の表の値
+            boolean real = face.key.startsWith("sys:") && face.hasGlyph(0x3042);
+            float wa = real ? face.ascent : asc, wd = real ? face.descent : desc;
+            s.lineAsc = wa + EA_LINE_EXTRA / 2 * (wa + wd);
+            s.lineDesc = wd + EA_LINE_EXTRA / 2 * (wa + wd);
+        } else if (face.useTypo) {
+            s.lineAsc = s.textAscent; s.lineDesc = s.textDescent;
+        } else {
+            try {
+                var hh = face.ttf.getHorizontalHeader();
+                s.lineAsc = (hh.getAscender() + hh.getLineGap()) / face.unitsPerEm;
+                s.lineDesc = -hh.getDescender() / face.unitsPerEm;
+            } catch (IOException | RuntimeException e) {
+                s.lineAsc = s.textAscent; s.lineDesc = s.textDescent;
+            }
+        }
         specs.put(key, s);
         return s;
     }
+
+    /** 図形の文字で、和文の書体の行の高さに足す割合 (winAscent + winDescent に対して)。 */
+    static final float EA_LINE_EXTRA = 0.3f;
+    /** 欧文の書体の中の和文の文字 (代わりの和文の書体 = ＭＳ Ｐゴシック相当) の基線より上・下 (em)。 */
+    static final float EA_FALLBACK_ASC = 0.859f + EA_LINE_EXTRA / 2, EA_FALLBACK_DESC = 0.141f + EA_LINE_EXTRA / 2;
 
     /** 名前から太い書体と分かるか (HG 系の E・UB・B、極太・太字の表記)。 */
     static boolean heavy(String name) {
@@ -803,6 +1017,8 @@ public final class FontManager {
         Face face = base.face;
         float asc = Math.max(base.ascent, eas.ascent), desc = Math.max(base.descent, eas.descent);
         s = new Spec(face, eaFace, bold, italic, asc, desc, latin);
+        s.textAscent = base.textAscent;
+        s.textDescent = base.textDescent;
         specs.put(key, s);
         return s;
     }

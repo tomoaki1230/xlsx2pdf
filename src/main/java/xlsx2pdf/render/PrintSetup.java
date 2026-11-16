@@ -32,6 +32,10 @@ public final class PrintSetup {
     public boolean centerH, centerV;
     /** 枠線・行列番号を印刷する。 */
     public boolean gridlines, headings;
+    /** 簡易印刷 (pageSetup の draft)。Excel はセルの文字だけを印刷する (塗り・罫線・枠線・図形・グラフを印刷しない)。 */
+    public boolean draft;
+    /** 右から左のシート (sheetView の rightToLeft)。列を右から左へ並べる。 */
+    public boolean rtl;
     /** ページの順序が「左から右」。 */
     public boolean overThenDown;
     /** 先頭ページ番号 (null = 自動)。 */
@@ -133,12 +137,13 @@ public final class PrintSetup {
                 p.firstPageNumber = (int) ps.getFirstPageNumber();
             if (ps.isSetErrors()) p.errors = ps.getErrors().toString();
             if (ps.isSetBlackAndWhite()) p.blackAndWhite = ps.getBlackAndWhite();
+            if (ps.isSetDraft()) p.draft = ps.getDraft();
             if (ps.isSetCellComments()) p.comments = ps.getCellComments().toString();
             if (ps.isSetHorizontalDpi() && validDpi(ps.getHorizontalDpi())) p.hdpi = (int) ps.getHorizontalDpi();
             if (ps.isSetVerticalDpi() && validDpi(ps.getVerticalDpi())) p.vdpi = (int) ps.getVerticalDpi();
             // Excel の PDF 出力は、ファイルに別の解像度が書かれていても多くは 600 dpi でレイアウトする
-            // (そのプリンタが出力した PC にないことが多い)。
-            p.hdpi = 600; p.vdpi = 600;
+            // (そのプリンタが出力した PC にないことが多い)。--use-file-dpi のときだけファイルの値を使う
+            if (!useFileDpi) { p.hdpi = 600; p.vdpi = 600; }
             if (ps.isSetPaperWidth() && ps.isSetPaperHeight()) {
                 double w = parseLen(ps.getPaperWidth()), h = parseLen(ps.getPaperHeight());
                 if (w > 0 && h > 0) { p.paperW = w; p.paperH = h; paper = -1; }
@@ -168,6 +173,7 @@ public final class PrintSetup {
         if (ws.isSetSheetViews() && ws.getSheetViews().sizeOfSheetViewArray() > 0) {
             CTSheetView v = ws.getSheetViews().getSheetViewArray(0);
             if (v.isSetShowZeros()) p.showZeros = v.getShowZeros();
+            if (v.isSetRightToLeft()) p.rtl = v.getRightToLeft();
         }
         if (ws.isSetRowBreaks()) for (CTBreak b : ws.getRowBreaks().getBrkArray()) if (!b.isSetMan() || b.getMan()) p.rowBreaks.add((int) b.getId());
         if (ws.isSetColBreaks()) for (CTBreak b : ws.getColBreaks().getBrkArray()) if (!b.isSetMan() || b.getMan()) p.colBreaks.add((int) b.getId());
@@ -177,9 +183,17 @@ public final class PrintSetup {
             String f = n.getRefersToFormula();
             if (f == null) continue;
             if ("_xlnm.Print_Area".equalsIgnoreCase(n.getNameName())) {
+                // 壊れた参照 (#REF!) を含む印刷範囲は、Excel は全体を無効として使用範囲を印刷する (夜間 n2169: A1:U72,#REF!)
+                if (f.contains("#REF!")) continue;
+                if (f.replaceAll("'[^']*'", "").contains("(")) {   // シート名 ('3-9(1)' など) の括弧は数えない
+                    // 数式の印刷範囲 (OFFSET(…,COUNTA(…)) など。夜間 n4592): Excel は評価した範囲を印刷する
+                    CellRangeAddress a = evalArea(wb, sheet, f);
+                    if (a != null) p.printAreas.add(a);
+                    continue;
+                }
                 for (String part : splitRefs(f)) {
                     CellRangeAddress a = parseRange(part);
-                    if (a != null) p.printAreas.add(a);
+                    if (a != null && a.getFirstRow() >= 0 && a.getFirstColumn() >= 0) p.printAreas.add(a);
                 }
             } else if ("_xlnm.Print_Titles".equalsIgnoreCase(n.getNameName())) {
                 for (String part : splitRefs(f)) {
@@ -247,6 +261,22 @@ public final class PrintSetup {
         int n = 0;
         for (char c : letters.toUpperCase().toCharArray()) n = n * 26 + (c - 'A' + 1);
         return n - 1;
+    }
+
+    /** 数式の範囲 (名前定義の OFFSET など) を評価してセル範囲にする。評価できなければ null (使用範囲を印刷する)。 */
+    static CellRangeAddress evalArea(XSSFWorkbook wb, XSSFSheet sheet, String f) {
+        try {
+            var fe = wb.getCreationHelper().createFormulaEvaluator();
+            var v = ((org.apache.poi.xssf.usermodel.XSSFFormulaEvaluator) fe)._getWorkbookEvaluator().evaluateList(f,
+                    new org.apache.poi.ss.util.CellReference(sheet.getSheetName(), 0, 0, false, false), new CellRangeAddress(0, 0, 0, 0));
+            if (v instanceof org.apache.poi.ss.formula.eval.AreaEval a && a.getFirstRow() >= 0 && a.getFirstColumn() >= 0)
+                return new CellRangeAddress(a.getFirstRow(), a.getLastRow(), a.getFirstColumn(), a.getLastColumn());
+            if (v instanceof org.apache.poi.ss.formula.eval.RefEval r && r.getRow() >= 0 && r.getColumn() >= 0)
+                return new CellRangeAddress(r.getRow(), r.getRow(), r.getColumn(), r.getColumn());
+        } catch (RuntimeException e) {
+            // 評価できない数式は印刷範囲なしとする
+        }
+        return null;
     }
 
     /** カンマ区切りの参照を分割する (引用符で囲まれたシート名の中のカンマは区切りとしない)。 */

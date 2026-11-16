@@ -62,9 +62,10 @@ public final class DrawingPainter {
                 drawingPart = d.getPackagePart();
                 try (InputStream in = drawingPart.getInputStream()) {
                     Element root = Xml.parse(in);
-                    anchors.addAll(Xml.resolveAlternate(root, Set.of("a14", "x14")));
+                    anchors.addAll(Xml.resolveAlternate(root, Set.of("a14", "x14", "cx1", "cx2", "cx4", "sle15", "sle", "tsle")));
                 } catch (Exception e) {
                     // 読めない描画は無視する
+                    Warnings.add("図形の定義を読めませんでした", e);
                 }
                 break;
             }
@@ -215,7 +216,7 @@ public final class DrawingPainter {
             switch (c.getLocalName()) {
                 case "sp", "grpSp", "pic", "graphicFrame", "cxnSp" -> { return c; }
                 case "AlternateContent" -> {
-                    List<Element> r = Xml.resolveAlternate(anchor, Set.of("a14"));
+                    List<Element> r = Xml.resolveAlternate(anchor, Set.of("a14", "cx1", "cx2", "cx4", "sle15", "sle", "tsle"));
                     for (Element x : r) {
                         String n = x.getLocalName();
                         if (n.equals("sp") || n.equals("grpSp") || n.equals("pic") || n.equals("graphicFrame") || n.equals("cxnSp")) return x;
@@ -245,6 +246,11 @@ public final class DrawingPainter {
      * @param x1 ブロックの右端
      * @param y1 ブロックの下端
      */
+    /** 右から左のシート (本体を左右反転して描く)。 */
+    public boolean rtl;
+    /** 白黒印刷 (pageSetup の blackAndWhite): 図形の塗りは白、線と文字は黒、グラフの系列は黒・白・灰色の順。 */
+    public boolean bw;
+
     public void paint(PdfCanvas cv, double x0, double y0, double x1, double y1) throws IOException {
         Rectangle2D view = new Rectangle2D.Double(x0, y0, x1 - x0, y1 - y0);
         for (Element a : anchors) {
@@ -253,18 +259,38 @@ public final class DrawingPainter {
             Rectangle2D r = rect(an);
             if (!r.intersects(view) && !(r.getWidth() == 0 || r.getHeight() == 0)) continue;
             Element obj = objectOf(a);
+            ctx.checkDeadline();
             try {
-                paintObject(cv, obj, unrotatedBounds(obj, r), null);
+                if (rtl) {
+                    // 右から左のシート: 位置は左右反転したまま、中身の反転を打ち消す
+                    cv.save();
+                    cv.transform(PdfCanvas.flipAbout(r.getCenterX()));
+                }
+                try {
+                    paintObject(cv, obj, unrotatedBounds(obj, r), null);
+                } finally {
+                    if (rtl) cv.restore();
+                }
             } catch (RuntimeException e) {
                 // 対応していないオブジェクトでページの描画を止めない
+                Warnings.add("図形を描けませんでした", e);
             }
         }
         for (VmlControls.Control c : controls) {
             if (!c.print) continue;
             try {
-                c.paint(cv, this, L);
+                if (rtl) {
+                    Rectangle2D cr = c.rect(L);
+                    cv.save();
+                    cv.transform(PdfCanvas.flipAbout(cr.getCenterX()));
+                }
+                try {
+                    c.paint(cv, this, L);
+                } finally {
+                    if (rtl) cv.restore();
+                }
             } catch (RuntimeException e) {
-                // 無視する
+                Warnings.add("フォームコントロールを描けませんでした", e);
             }
         }
     }
@@ -336,7 +362,7 @@ public final class DrawingPainter {
             try {
                 paintObject(cv, child, cr, grpFill);
             } catch (RuntimeException e) {
-                // 飛ばす
+                Warnings.add("グループ内の図形を描けませんでした", e);
             }
         }
         cv.restore();
@@ -430,8 +456,40 @@ public final class DrawingPainter {
                 pt = new AffineTransform(at);
                 pt.scale(anchor.getWidth() / p.getW(), anchor.getHeight() / p.getH());
             }
-            Path2D path = new Path2D.Double(p.getPath(c), pt);
+            Path2D path = finiteOnly(new Path2D.Double(p.getPath(c), pt));
             out.add(new GeoPath(path, p.isFilled(), p.isStroked(), p.getFill()));
+        }
+        return out;
+    }
+
+    /**
+     * 座標が NaN の区間を除いたパス。POI は半径 0 の円弧 (調整値 0 の角丸など) を NaN にするが、半径 0 の円弧は
+     * 点なので、除いても形は変わらない。
+     */
+    private static Path2D finiteOnly(Path2D p) {
+        double[] q = new double[6];
+        boolean bad = false;
+        for (java.awt.geom.PathIterator it = p.getPathIterator(null); !it.isDone() && !bad; it.next()) {
+            int t = it.currentSegment(q);
+            int n = t == java.awt.geom.PathIterator.SEG_CLOSE ? 0 : t == java.awt.geom.PathIterator.SEG_QUADTO ? 4 : t == java.awt.geom.PathIterator.SEG_CUBICTO ? 6 : 2;
+            for (int i = 0; i < n; i++) if (!Double.isFinite(q[i])) bad = true;
+        }
+        if (!bad) return p;
+        Path2D out = new Path2D.Double(p.getWindingRule());
+        boolean started = false;
+        for (java.awt.geom.PathIterator it = p.getPathIterator(null); !it.isDone(); it.next()) {
+            int t = it.currentSegment(q);
+            int n = t == java.awt.geom.PathIterator.SEG_CLOSE ? 0 : t == java.awt.geom.PathIterator.SEG_QUADTO ? 4 : t == java.awt.geom.PathIterator.SEG_CUBICTO ? 6 : 2;
+            boolean ok = true;
+            for (int i = 0; i < n; i++) if (!Double.isFinite(q[i])) ok = false;
+            if (!ok) continue;
+            switch (t) {
+                case java.awt.geom.PathIterator.SEG_MOVETO -> { out.moveTo(q[0], q[1]); started = true; }
+                case java.awt.geom.PathIterator.SEG_LINETO -> { if (started) out.lineTo(q[0], q[1]); else { out.moveTo(q[0], q[1]); started = true; } }
+                case java.awt.geom.PathIterator.SEG_QUADTO -> { if (started) out.quadTo(q[0], q[1], q[2], q[3]); }
+                case java.awt.geom.PathIterator.SEG_CUBICTO -> { if (started) out.curveTo(q[0], q[1], q[2], q[3], q[4], q[5]); }
+                default -> { if (started) out.closePath(); }
+            }
         }
         return out;
     }
@@ -480,7 +538,83 @@ public final class DrawingPainter {
         PDImageXObject image;
         /** 画像の切り取り {左, 上, 右, 下} (割合)。 */
         double[] srcRect;
+        /** 網掛けの模様 (8 × 8、ビット r × 8 + c が 1 なら前景色)。網掛けでなければ null。 */
+        Long pattern;
+        /** 網掛けの前景色と背景色。 */
+        Color patternFg, patternBg;
     }
+
+    /** 網掛けの塗り (模様の名前が表になければ近似の色の単色)。 */
+    static Paint pattern(String prst, Color fg, Color bg, Color approx) {
+        Paint p = new Paint();
+        p.color = approx;
+        Long bits = prst == null ? null : PATTERNS.get(prst);
+        if (bits != null) { p.pattern = bits; p.patternFg = fg; p.patternBg = bg; }
+        return p;
+    }
+
+    /**
+     * Excel が印刷する図形の網掛けの模様 (8 × 8。用紙上で 1 マス 0.75pt)。Excel の PDF から取り出した。
+     * 倍率によらず同じ大きさで、格子は用紙の左上から「6pt の倍数 − 余白」の位置に揃う。
+     */
+    private static final java.util.Map<String, Long> PATTERNS = java.util.Map.ofEntries(
+            Map.entry("pct5", 0x0000001000000001L),
+            Map.entry("pct10", 0x0010000100100001L),
+            Map.entry("pct20", 0x0044001100440011L),
+            Map.entry("pct25", 0x4411441144114411L),
+            Map.entry("pct30", 0x8855225588552255L),
+            Map.entry("pct40", 0xA855AA558A55AA55L),
+            Map.entry("pct50", 0xAA55AA55AA55AA55L),
+            Map.entry("pct60", 0xAADDAA77AADDAA77L),
+            Map.entry("pct70", 0xBBEEBBEEBBEEBBEEL),
+            Map.entry("pct75", 0xFFBBFFEEFFBBFFEEL),
+            Map.entry("pct80", 0xFF7FFFF7FF7FFFF7L),
+            Map.entry("pct90", 0xFEFFFFFFEFFFFFFFL),
+            Map.entry("horz", 0x00000000000000FFL),
+            Map.entry("vert", 0x0101010101010101L),
+            Map.entry("ltHorz", 0x000000FF000000FFL),
+            Map.entry("ltVert", 0x1111111111111111L),
+            Map.entry("dkHorz", 0x0000FFFF0000FFFFL),
+            Map.entry("dkVert", 0x3333333333333333L),
+            Map.entry("narHorz", 0x00FF00FF00FF00FFL),
+            Map.entry("narVert", 0xAAAAAAAAAAAAAAAAL),
+            Map.entry("dashHorz", 0x000000F00000000FL),
+            Map.entry("dashVert", 0x1010101001010101L),
+            Map.entry("cross", 0x01010101010101FFL),
+            Map.entry("dnDiag", 0x8040201008040201L),
+            Map.entry("upDiag", 0x0102040810204080L),
+            Map.entry("ltDnDiag", 0x8844221188442211L),
+            Map.entry("ltUpDiag", 0x1122448811224488L),
+            Map.entry("dkDnDiag", 0x99CC663399CC6633L),
+            Map.entry("dkUpDiag", 0x993366CC993366CCL),
+            Map.entry("wdDnDiag", 0xC1E070381C0E0783L),
+            Map.entry("wdUpDiag", 0x83070E1C3870E0C1L),
+            Map.entry("dashDnDiag", 0x0000884422110000L),
+            Map.entry("dashUpDiag", 0x0000112244880000L),
+            Map.entry("diagCross", 0x8142241818244281L),
+            Map.entry("smCheck", 0x9966669999666699L),
+            Map.entry("lgCheck", 0xF0F0F0F00F0F0F0FL),
+            Map.entry("smGrid", 0x111111FF111111FFL),
+            Map.entry("lgGrid", 0x01010101010101FFL),
+            Map.entry("dotGrid", 0x0001000100010055L),
+            Map.entry("smConfetti", 0x2004800840021001L),
+            Map.entry("lgConfetti", 0xB130031BD8C00C8DL),
+            Map.entry("horzBrick", 0x101010FF010101FFL),
+            Map.entry("diagBrick", 0x8142241810204080L),
+            Map.entry("solidDmnd", 0x00081C3E7F3E1C08L),
+            Map.entry("openDmnd", 0x8041221408142241L),
+            Map.entry("dotDmnd", 0x0044001000440001L),
+            Map.entry("plaid", 0x0F0F0F0FAA55AA55L),
+            Map.entry("sphere", 0x1F1F19EEF1F191EEL),
+            Map.entry("weave", 0x8A442811A2442A11L),
+            Map.entry("divot", 0x0180010008100800L),
+            Map.entry("shingle", 0x808040300C1221C0L),
+            Map.entry("wave", 0x03A4180003A41800L),
+            Map.entry("trellis", 0x99FF66FF99FF66FFL),
+            Map.entry("zigZag", 0x1824428118244281L));
+
+    /** 網掛けの格子の基準 (用紙の左上からの左余白・上余白、pt)。 */
+    public double patternLeft, patternTop;
 
     /**
      * 塗りつぶし要素を解決する。
@@ -524,6 +658,12 @@ public final class DrawingPainter {
                 if (fg == null) fg = Color.BLACK;
                 if (bg == null) bg = Color.WHITE;
                 String prst = fill.getAttribute("prst");
+                Long bits = PATTERNS.get(prst);
+                if (bits != null) {
+                    p.pattern = bits;
+                    p.patternFg = fg;
+                    p.patternBg = bg;
+                }
                 double cov = 0.5;
                 if (prst.startsWith("pct")) {
                     try { cov = Integer.parseInt(prst.substring(3)) / 100.0; } catch (NumberFormatException ignored) { cov = 0.5; }
@@ -545,12 +685,139 @@ public final class DrawingPainter {
         return p;
     }
 
+    /** SVG の拡張 (asvg:svgBlip) の中身。色の調整がある画像、白黒印刷、SVG がない画像は null (代わりの画像を描く)。 */
+    private byte[] svgData(Element blip) {
+        if (blip == null || drawingPart == null || bw) return null;
+        for (Element c : Xml.children(blip)) {
+            switch (c.getLocalName()) {
+                case "grayscl", "lum", "biLevel", "clrChange", "duotone", "alphaModFix" -> { return null; }
+                default -> { }
+            }
+        }
+        for (Element ext : Xml.children(Xml.child(blip, "extLst"))) {
+            for (Element sb : Xml.children(ext)) {
+                if (!"svgBlip".equals(sb.getLocalName())) continue;
+                String rid = sb.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed");
+                if (rid.isEmpty()) continue;
+                try {
+                    PackageRelationship rel = drawingPart.getRelationship(rid);
+                    if (rel == null) return null;
+                    org.apache.poi.openxml4j.opc.PackagePart part = drawingPart.getRelatedPart(rel);
+                    try (java.io.InputStream in = part.getInputStream()) {
+                        byte[] b = in.readNBytes(32 << 20);
+                        return Images.isGzip(b) ? Images.gunzip(b) : b;
+                    }
+                } catch (Exception e) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
     /** blip の画像を埋め込む。 */
     PDImageXObject image(Element blip, double wPt, double hPt) {
         if (blip == null || drawingPart == null) return null;
         String rid = blip.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed");
         if (rid.isEmpty()) rid = blip.getAttribute("r:embed");
-        return imageByRel(drawingPart, rid, wPt, hPt);
+        boolean adjust = false;
+        for (Element c : Xml.children(blip)) {
+            switch (c.getLocalName()) {
+                case "grayscl", "lum", "biLevel", "clrChange", "duotone" -> adjust = true;
+                default -> { }
+            }
+        }
+        if (!adjust) return imageByRel(drawingPart, rid, wPt, hPt);
+        return adjustedImage(blip, rid, wPt, hPt);
+    }
+
+    /**
+     * 色を調整した画像 (グレースケール、明るさ・コントラスト、白黒、透明にする色、2 色)。調整は書かれた順に当てる。
+     */
+    private PDImageXObject adjustedImage(Element blip, String rid, double wPt, double hPt) {
+        try {
+            PackageRelationship rel = drawingPart.getRelationship(rid);
+            if (rel == null) return null;
+            PackagePart ip = drawingPart.getRelatedPart(rel);
+            byte[] data;
+            try (InputStream in = ip.getInputStream()) {
+                data = in.readAllBytes();
+            }
+            String name = ip.getPartName().getName();
+            StringBuilder sig = new StringBuilder(name).append('#');
+            for (Element c : Xml.children(blip)) {
+                sig.append(c.getLocalName());
+                var attrs = c.getAttributes();
+                for (int i = 0; i < attrs.getLength(); i++) sig.append(attrs.item(i).getNodeName()).append(attrs.item(i).getNodeValue());
+                Color cc = ctx.theme.colorChild(c, null);
+                if (cc != null) sig.append(cc.getRGB());
+                for (Element d : Xml.children(c)) { Color x = ctx.theme.colorChild(d, null); if (x != null) sig.append(x.getRGB()); }
+            }
+            Object key = sig.toString() + "@" + Math.round(wPt) + "x" + Math.round(hPt);
+            PDImageXObject cached = ctx.images.get(key);
+            if (cached != null) return cached;
+            java.awt.image.BufferedImage bi = Images.isMetafile(data, name) ? Images.renderMetafile(data, name, wPt, hPt, ctx.fonts) : Images.decodeLimited(data);
+            if (bi == null) return null;
+            java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(bi.getWidth(), bi.getHeight(), java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            out.getGraphics().drawImage(bi, 0, 0, null);
+            for (Element c : Xml.children(blip)) adjustImage(out, c);
+            PDImageXObject img = org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory.createFromImage(ctx.doc, out);
+            ctx.images.put(key, img);
+            return img;
+        } catch (Exception e) {
+            Warnings.add("画像の色を調整できませんでした", e);
+            return imageByRel(drawingPart, rid, wPt, hPt);
+        }
+    }
+
+    /** 1 つの色の調整を画像に当てる。 */
+    private void adjustImage(java.awt.image.BufferedImage img, Element c) {
+        String n = c.getLocalName();
+        int w = img.getWidth(), h = img.getHeight();
+        double bright = Xml.longAttr(c, "bright", 0) / 100000.0, contrast = Xml.longAttr(c, "contrast", 0) / 100000.0;
+        double k = contrast >= 0 ? 1 / Math.max(0.01, 1 - contrast) : 1 + contrast;
+        double thresh = Xml.longAttr(c, "thresh", 50000) / 100000.0;
+        Color from = null, to = null, d1 = null, d2 = null;
+        if (n.equals("clrChange")) {
+            from = ctx.theme.colorChild(Xml.child(c, "clrFrom"), null);
+            to = ctx.theme.colorChild(Xml.child(c, "clrTo"), null);
+            if (from == null || to == null) return;
+        } else if (n.equals("duotone")) {
+            List<Element> cs = Xml.children(c);
+            if (cs.size() < 2) return;
+            d1 = ctx.theme.resolve(cs.get(0), null);
+            d2 = ctx.theme.resolve(cs.get(1), null);
+            if (d1 == null || d2 == null) return;
+        } else if (!n.equals("grayscl") && !n.equals("lum") && !n.equals("biLevel")) return;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int argb = img.getRGB(x, y);
+                int a = argb >>> 24, r = (argb >> 16) & 255, g = (argb >> 8) & 255, b = argb & 255;
+                double l = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+                switch (n) {
+                    case "grayscl" -> { int v = (int) Math.round(l * 255); r = g = b = v; }
+                    case "lum" -> { r = lum(r, bright, k); g = lum(g, bright, k); b = lum(b, bright, k); }
+                    case "biLevel" -> { int v = l >= thresh ? 255 : 0; r = g = b = v; }
+                    case "clrChange" -> {
+                        if (Math.abs(r - from.getRed()) <= 2 && Math.abs(g - from.getGreen()) <= 2 && Math.abs(b - from.getBlue()) <= 2) {
+                            r = to.getRed(); g = to.getGreen(); b = to.getBlue(); a = a * to.getAlpha() / 255;
+                        }
+                    }
+                    default -> { // duotone
+                        r = (int) Math.round(d1.getRed() + (d2.getRed() - d1.getRed()) * l);
+                        g = (int) Math.round(d1.getGreen() + (d2.getGreen() - d1.getGreen()) * l);
+                        b = (int) Math.round(d1.getBlue() + (d2.getBlue() - d1.getBlue()) * l);
+                    }
+                }
+                img.setRGB(x, y, a << 24 | r << 16 | g << 8 | b);
+            }
+        }
+    }
+
+    /** 明るさ・コントラストを 1 つの色の成分に当てる (0〜255)。 */
+    private static int lum(int v, double bright, double k) {
+        double x = (v / 255.0 - 0.5) * k + 0.5 + bright;
+        return (int) Math.round(Math.max(0, Math.min(1, x)) * 255);
     }
 
     /** パーツの関係 ID の画像を埋め込む。 */
@@ -568,6 +835,7 @@ public final class DrawingPainter {
             Object key = meta ? name + "@" + Math.round(wPt) + "x" + Math.round(hPt) : name;
             return Images.toPdf(ctx, key, data, name, wPt, hPt);
         } catch (Exception e) {
+            Warnings.add("画像を読めませんでした", e);
             return null;
         }
     }
@@ -585,6 +853,10 @@ public final class DrawingPainter {
         }
         if (p.stopPos != null && p.stopPos.size() > 1) {
             fillGradient(cv, s, p, mod);
+            return;
+        }
+        if (p.pattern != null) {
+            cv.fillPattern(s, p.pattern, modify(p.patternFg, mod), modify(p.patternBg, mod), 0.75, -patternLeft, -patternTop);
             return;
         }
         cv.fill(s, modify(p.color, mod));
@@ -768,7 +1040,14 @@ public final class DrawingPainter {
         PdfCanvas.Stroke st = new PdfCanvas.Stroke((float) w);
         if (ls.dash != null) {
             float[] d = new float[ls.dash.length];
-            for (int i = 0; i < d.length; i++) d[i] = (float) (ls.dash[i] * w);
+            // 端が丸・四角の線は、端の分 (線の太さ) だけ線の部分を短くし、すき間を広げる (Office の描き方。
+            // そのままでは点線の点が端でつながり、実線に見える)
+            boolean capped = ls.cap == 1 || ls.cap == 2;
+            for (int i = 0; i < d.length; i++) {
+                double v = ls.dash[i] * w;
+                if (capped) v = i % 2 == 0 ? Math.max(0.01, v - w) : v + w;
+                d[i] = (float) v;
+            }
             st.dash(d);
         }
         st.cap = ls.cap;
@@ -854,14 +1133,47 @@ public final class DrawingPainter {
         LineStyle ls = line(Xml.child(spPr, "ln"), lnRef == null ? null : ctx.theme.colorChild(lnRef, null), lnRef);
         boolean connector = sp.getLocalName().equals("cxnSp");
         if (connector) fill = null;
+        if (bw) {
+            // 白黒印刷: 塗りは白、線は黒 (Excel の印刷)
+            if (fill != null) { Paint wp = new Paint(); wp.color = java.awt.Color.WHITE; fill = wp; }
+            if (ls != null) ls.color = java.awt.Color.BLACK;
+        }
 
-        cv.save();
-        applyRotFlip(cv, r, rot, flipH, flipV);
+        Scene3D.View v3 = Scene3D.of(spPr, r);
         List<GeoPath> paths = paths(geom, adj, r);
+        if (v3 != null && v3.extruded() && fill != null) {
+            // 奥行き (押し出し): 奥の面から手前へ、図形をずらしながら暗い色で重ねて塗る (側面)
+            Element sp3d = Xml.child(spPr, "sp3d");
+            Element ec = Xml.child(sp3d, "extrusionClr");
+            java.awt.Color base = ec != null ? ctx.theme.colorChild(ec, null) : fill.color != null ? fill.color
+                    : fill.stopColors != null && !fill.stopColors.isEmpty() ? fill.stopColors.get(0) : java.awt.Color.GRAY;
+            if (base == null) base = java.awt.Color.GRAY;
+            java.awt.Color side = new java.awt.Color((int) (base.getRed() * EXTRUDE_SHADE), (int) (base.getGreen() * EXTRUDE_SHADE), (int) (base.getBlue() * EXTRUDE_SHADE));
+            int steps = (int) Math.min(200, Math.ceil(Math.hypot(v3.depthX(), v3.depthY()) / 0.4));
+            for (int k = steps; k >= 1; k--) {
+                cv.save();
+                cv.transform(AffineTransform.getTranslateInstance(v3.depthX() * k / steps, v3.depthY() * k / steps));
+                cv.transform(v3.at());
+                applyRotFlip(cv, r, rot, flipH, flipV);
+                for (GeoPath gp : paths) if (gp.fill) cv.fill(gp.path, side);
+                cv.restore();
+            }
+        }
+        cv.save();
+        if (v3 != null) cv.transform(v3.at());
+        applyRotFlip(cv, r, rot, flipH, flipV);
         paintEffects(cv, spPr, style, paths, r);
+        Element effl = Xml.child(spPr, "effectLst");
+        // 光彩 (図形の外側のぼけた帯) と反射 (下に反転した薄い像) は図形の後ろ
+        paintGlow(cv, Xml.child(effl, "glow"), paths);
+        paintReflection(cv, Xml.child(effl, "reflection"), paths, fill, r);
         for (GeoPath gp : paths) {
             if (gp.fill && fill != null && gp.mod != PaintStyle.PaintModifier.NONE) fillShape(cv, gp.path, fill, gp.mod);
         }
+        // 面取り・内側の影・ぼかし (ソフトエッジ) は塗りの上
+        paintBevel(cv, Xml.child(spPr, "sp3d"), paths);
+        paintInnerShadow(cv, Xml.child(effl, "innerShdw"), paths);
+        paintSoftEdge(cv, Xml.child(effl, "softEdge"), paths);
         for (GeoPath gp : paths) {
             if (gp.stroke && ls != null) {
                 strokeShape(cv, gp.path, ls);
@@ -883,12 +1195,16 @@ public final class DrawingPainter {
                 }
             }
             cv.save();
+            if (v3 != null) cv.transform(v3.at());
             // 文字は図形と一緒に回転するが、反転はしない
             applyRotFlip(cv, r, rot + (flipV ? 180 : 0), false, false);
             new ShapeText(ctx, this).paint(cv, tx, tr, fontRefColor, fontRefFace);
             cv.restore();
         }
     }
+
+    /** 押し出しの側面の明るさ (塗りの色の倍。Excel の印刷では側面はほぼ黒)。 */
+    private static final double EXTRUDE_SHADE = 0.3;
 
     /** スタイル参照 (fillRef) の塗りつぶし。 */
     Paint styleFill(Element style) {
@@ -927,17 +1243,290 @@ public final class DrawingPainter {
         if (eff != null) paintShadow(cv, Xml.child(eff, "outerShdw"), paths, null);
     }
 
-    /** 外側の影を描く (距離と方向だけずらした塗りつぶし)。 */
+    /** 外側の影を描く (距離と方向だけずらし、ぼかし blurRad と透明度を段階の塗りで近似する)。 */
     private void paintShadow(PdfCanvas cv, Element sh, List<GeoPath> paths, Color ph) throws IOException {
         if (sh == null) return;
         Color c = ctx.theme.colorChild(sh, ph);
         if (c == null) return;
         double dist = Xml.longAttr(sh, "dist", 0) / EMU;
         double dir = Math.toRadians(Xml.longAttr(sh, "dir", 0) / 60000.0);
-        if (dist <= 0) return;
+        double blur = Xml.longAttr(sh, "blurRad", 0) / EMU;
+        if (dist <= 0 && blur <= 0) return;
         AffineTransform at = AffineTransform.getTranslateInstance(Math.cos(dir) * dist, Math.sin(dir) * dist);
         for (GeoPath gp : paths) {
-            if (gp.fill) cv.fill(at.createTransformedShape(gp.path), c);
+            if (gp.fill) blurFill(cv, at.createTransformedShape(gp.path), c, blur);
+        }
+    }
+
+    /** 文字の影の縁の濃さ (影の色の不透明度に対する割合)。exp51 wordart で 0.15・0.3・0.5 を試し 0.3 が最も合う。 */
+    static final double TEXT_SHADOW_EDGE = 0.3;
+
+    /** 文字の外側の影 (rPr の effectLst の outerShdw): 形 s をずらして、ぼかして塗る。 */
+    void textShadow(PdfCanvas cv, Element sh, java.awt.Shape s) throws IOException {
+        if (sh == null || s == null) return;
+        Color c = ctx.theme.colorChild(sh, null);
+        if (c == null) return;
+        double dist = Xml.longAttr(sh, "dist", 0) / EMU;
+        double dir = Math.toRadians(Xml.longAttr(sh, "dir", 0) / 60000.0);
+        double blur = Xml.longAttr(sh, "blurRad", 0) / EMU;
+        if (dist <= 0 && blur <= 0) return;
+        java.awt.Shape m = AffineTransform.getTranslateInstance(Math.cos(dir) * dist, Math.sin(dir) * dist).createTransformedShape(s);
+        double a = c.getAlpha() / 255.0;
+        if (blur <= 0.5) { cv.fill(m, c); return; }
+        // 縁の外は、縁で TEXT_SHADOW_EDGE 倍の濃さから、ぼかしの半径で 0 まで薄くなる (幅を変えた線を同じ濃さで重ねる)。中は文字に隠れる
+        cv.fill(m, withAlpha(c, a * TEXT_SHADOW_EDGE));
+        double k = 1 - Math.pow(1 - TEXT_SHADOW_EDGE * a, 1.0 / BLUR_STEPS);
+        for (int i = BLUR_STEPS; i >= 1; i--) cv.stroke(m, roundStroke(2 * blur * i / BLUR_STEPS), withAlpha(c, k));
+    }
+
+    /** 影のぼかしのガウスの σ (blurRad に対する割合) と、ソフトエッジの σ (rad に対する割合)。exp64 の実測に合わせる。 */
+    static final double BLUR_SIGMA = 0.5, SOFT_SIGMA = 0.35;
+    /** ソフトエッジで縮めない幅 (pt)。形を rad - SOFT_KEEP 縮めて σ = SOFT_SIGMA × rad でぼかす (exp64 の 5pt・25pt の断面に合う)。 */
+    static final double SOFT_KEEP = 1.7;
+    /** ぼかしの画像の解像度 (画素/pt) と画素数の上限。 */
+    static final double BLUR_RES = 2.0;
+    static final long BLUR_MAX_PIXELS = 4_000_000;
+
+    /** ぼかした型 (0〜1) と、その位置 (pt)。 */
+    record Raster(float[] v, int w, int h, double x, double y, double res) {
+        /** 型の値 → 不透明度 (0〜1) の関数 f で、色 c の画像として描く。 */
+        void draw(PdfCanvas cv, Color c, java.util.function.DoubleUnaryOperator f) throws IOException {
+            java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            int rgb = c.getRGB() & 0xFFFFFF;
+            double a0 = c.getAlpha() / 255.0;
+            int[] px = new int[w * h];
+            for (int i = 0; i < px.length; i++) {
+                int a = (int) Math.round(Math.max(0, Math.min(1, f.applyAsDouble(v[i]))) * a0 * 255);
+                px[i] = a << 24 | rgb;
+            }
+            img.setRGB(0, 0, w, h, px, 0, w);
+            PDImageXObject xo = org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory.createFromImage(cv.doc, img);
+            cv.image(xo, x, y, w / res, h / res, 1);
+        }
+    }
+
+    /** 形 s の型を σ (pt) でぼかす (箱型を 3 回)。大きすぎれば null。 */
+    static Raster mask(java.awt.Shape s, double sigma) { return mask(s, sigma, 0); }
+
+    /** 形 s を erode (pt) だけ内へ縮めた型を σ (pt) でぼかす。 */
+    static Raster mask(java.awt.Shape s, double sigma, double erode) {
+        Rectangle2D b = s.getBounds2D();
+        double pad = Math.max(1, sigma * 3);
+        double x = b.getX() - pad, y = b.getY() - pad, wPt = b.getWidth() + 2 * pad, hPt = b.getHeight() + 2 * pad;
+        double res = BLUR_RES;
+        while ((long) (wPt * res) * (long) (hPt * res) > BLUR_MAX_PIXELS && res > 0.25) res /= 2;
+        int w = (int) Math.ceil(wPt * res), h = (int) Math.ceil(hPt * res);
+        if (w <= 0 || h <= 0 || (long) w * h > BLUR_MAX_PIXELS) return null;
+        java.awt.image.BufferedImage m = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_BYTE_GRAY);
+        java.awt.Graphics2D g = m.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(Color.WHITE);
+        g.scale(res, res);
+        g.translate(-x, -y);
+        g.fill(s);
+        g.dispose();
+        float[] v = new float[w * h];
+        byte[] d = ((java.awt.image.DataBufferByte) m.getRaster().getDataBuffer()).getData();
+        for (int i = 0; i < v.length; i++) v[i] = (d[i] & 255) / 255f;
+        if (erode > 0) erode(v, w, h, erode * res);
+        // σ の箱型 3 回 (幅 ≈ √(12σ²/3 + 1))
+        int r = (int) Math.round((Math.sqrt(4 * sigma * res * sigma * res + 1) - 1) / 2);
+        if (r > 0) for (int k = 0; k < 3; k++) { boxH(v, w, h, r); boxV(v, w, h, r); }
+        return new Raster(v, w, h, x, y, res);
+    }
+
+    /** 型を e 画素だけ内へ縮める (外からの距離を 3-4 の距離変換で求め、境目は 1 画素でなめらかに)。 */
+    private static void erode(float[] v, int w, int h, double e) {
+        float big = 1e9f;
+        float[] dist = new float[w * h];
+        for (int i = 0; i < dist.length; i++) dist[i] = v[i] >= 0.5f ? big : 0;
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+            int i = y * w + x;
+            if (dist[i] == 0) continue;
+            float m = dist[i];
+            if (x > 0) m = Math.min(m, dist[i - 1] + 3);
+            if (y > 0) m = Math.min(m, dist[i - w] + 3);
+            if (x > 0 && y > 0) m = Math.min(m, dist[i - w - 1] + 4);
+            if (x < w - 1 && y > 0) m = Math.min(m, dist[i - w + 1] + 4);
+            if (x == 0 || y == 0 || x == w - 1 || y == h - 1) m = Math.min(m, 3);
+            dist[i] = m;
+        }
+        for (int y = h - 1; y >= 0; y--) for (int x = w - 1; x >= 0; x--) {
+            int i = y * w + x;
+            if (dist[i] == 0) continue;
+            float m = dist[i];
+            if (x < w - 1) m = Math.min(m, dist[i + 1] + 3);
+            if (y < h - 1) m = Math.min(m, dist[i + w] + 3);
+            if (x < w - 1 && y < h - 1) m = Math.min(m, dist[i + w + 1] + 4);
+            if (x > 0 && y < h - 1) m = Math.min(m, dist[i + w - 1] + 4);
+            dist[i] = m;
+        }
+        for (int i = 0; i < v.length; i++) {
+            double di = dist[i] / 3.0 - 0.5;   // 縁からの距離 (画素)
+            v[i] = (float) Math.max(0, Math.min(1, di - e + 0.5));
+        }
+    }
+
+    private static void boxH(float[] v, int w, int h, int r) {
+        float[] row = new float[w];
+        for (int yy = 0; yy < h; yy++) {
+            double sum = 0;
+            int o = yy * w;
+            for (int i = -r; i <= r; i++) sum += v[o + Math.max(0, Math.min(w - 1, i))];
+            for (int xx = 0; xx < w; xx++) {
+                row[xx] = (float) (sum / (2 * r + 1));
+                sum += v[o + Math.min(w - 1, xx + r + 1)] - v[o + Math.max(0, xx - r)];
+            }
+            System.arraycopy(row, 0, v, o, w);
+        }
+    }
+
+    private static void boxV(float[] v, int w, int h, int r) {
+        float[] col = new float[h];
+        for (int xx = 0; xx < w; xx++) {
+            double sum = 0;
+            for (int i = -r; i <= r; i++) sum += v[Math.max(0, Math.min(h - 1, i)) * w + xx];
+            for (int yy = 0; yy < h; yy++) {
+                col[yy] = (float) (sum / (2 * r + 1));
+                sum += v[Math.min(h - 1, yy + r + 1) * w + xx] - v[Math.max(0, yy - r) * w + xx];
+            }
+            for (int yy = 0; yy < h; yy++) v[yy * w + xx] = col[yy];
+        }
+    }
+
+    /** 段階の数 (ぼかしの近似)。 */
+    private static final int BLUR_STEPS = 8;
+
+    /** 図形を、縁を blur の幅でぼかして塗る (中心から外へ薄くなる線を重ねる)。 */
+    private static void blurFill(PdfCanvas cv, java.awt.Shape s, Color c, double blur) throws IOException {
+        double a = c.getAlpha() / 255.0;
+        if (blur <= 0.5) { cv.fill(s, c); return; }
+        // Excel と同じく画像にしてぼかす (形の型をガウスぼかしにして、色の透明度にする)
+        Raster m = mask(s, blur * BLUR_SIGMA);
+        if (m != null) { m.draw(cv, c, v -> v); return; }
+        // 中は元の濃さ。縁は幅 blur で 0 まで薄くなる (線を内側に向かって細く重ねる)
+        cv.save();
+        cv.fill(s, withAlpha(c, a * 0.5));
+        for (int i = BLUR_STEPS; i >= 1; i--) {
+            double w = blur * i / BLUR_STEPS;
+            cv.stroke(s, new PdfCanvas.Stroke((float) w), withAlpha(c, a / BLUR_STEPS * 0.9));
+        }
+        cv.fill(s, withAlpha(c, a * 0.5));
+        cv.restore();
+    }
+
+    private static Color withAlpha(Color c, double a) {
+        return new Color(c.getRed(), c.getGreen(), c.getBlue(), (int) Math.max(0, Math.min(255, Math.round(a * 255))));
+    }
+
+    /** 光彩: 図形の外側に半径 rad の色の帯 (外へ薄くなる)。 */
+    private void paintGlow(PdfCanvas cv, Element g, List<GeoPath> paths) throws IOException {
+        if (g == null) return;
+        Color c = ctx.theme.colorChild(g, null);
+        double rad = Xml.longAttr(g, "rad", 0) / EMU;
+        if (c == null || rad <= 0) return;
+        double a = c.getAlpha() / 255.0;
+        for (GeoPath gp : paths) {
+            if (!gp.fill) continue;
+            for (int i = BLUR_STEPS; i >= 1; i--) {
+                double w = 2 * rad * i / BLUR_STEPS;
+                cv.stroke(gp.path, roundStroke(w), withAlpha(c, Math.min(1, a * 1.6 / BLUR_STEPS)));
+            }
+        }
+    }
+
+    private static PdfCanvas.Stroke roundStroke(double w) {
+        PdfCanvas.Stroke st = new PdfCanvas.Stroke((float) w);
+        st.join = 1;
+        st.cap = 1;
+        return st;
+    }
+
+    /** ぼかし (ソフトエッジ): 図形の内側の縁を幅 rad で白に溶かす (背景を白とみなす)。 */
+    private void paintSoftEdge(PdfCanvas cv, Element se, List<GeoPath> paths) throws IOException {
+        if (se == null) return;
+        double rad = Xml.longAttr(se, "rad", 0) / EMU;
+        if (rad <= 0) return;
+        for (GeoPath gp : paths) {
+            if (!gp.fill) continue;
+            // 画像で: 形を内へ rad - SOFT_KEEP 縮めてぼかした型を塗りの濃さとし、残りに白を重ねる。形の外には重ねない
+            Raster m = mask(gp.path, rad * SOFT_SIGMA, Math.max(0, rad - SOFT_KEEP));
+            if (m != null) {
+                cv.save();
+                // 塗りの縁のぼかし (アンチエイリアス) も消すため、形より 0.75pt 広く切る
+                java.awt.geom.Area ca = new java.awt.geom.Area(gp.path);
+                ca.add(new java.awt.geom.Area(new java.awt.BasicStroke(1.5f).createStrokedShape(gp.path)));
+                cv.clip(ca);
+                m.draw(cv, Color.WHITE, v -> 1 - v);
+                cv.restore();
+                continue;
+            }
+            // 外側は白い背景なので切り抜かずに重ねる (縁のにじみも消える)
+            for (int i = BLUR_STEPS; i >= 1; i--) cv.stroke(gp.path, roundStroke(2 * rad * i / BLUR_STEPS), withAlpha(Color.WHITE, 1.8 / BLUR_STEPS));
+            cv.stroke(gp.path, roundStroke(rad), Color.WHITE);
+        }
+    }
+
+    /** 内側の影: 図形の中で、ずらした縁から内へぼける影。 */
+    private void paintInnerShadow(PdfCanvas cv, Element sh, List<GeoPath> paths) throws IOException {
+        if (sh == null) return;
+        Color c = ctx.theme.colorChild(sh, null);
+        if (c == null) return;
+        double dist = Xml.longAttr(sh, "dist", 0) / EMU, blur = Xml.longAttr(sh, "blurRad", 0) / EMU;
+        double dir = Math.toRadians(Xml.longAttr(sh, "dir", 0) / 60000.0);
+        AffineTransform at = AffineTransform.getTranslateInstance(Math.cos(dir) * dist, Math.sin(dir) * dist);
+        double a = c.getAlpha() / 255.0;
+        for (GeoPath gp : paths) {
+            if (!gp.fill) continue;
+            cv.save();
+            cv.clip(gp.path);
+            // 図形の外側を塗った影を、ずらして内側に落とす
+            java.awt.geom.Area outside = new java.awt.geom.Area(gp.path.getBounds2D().createUnion(at.createTransformedShape(gp.path).getBounds2D()));
+            java.awt.geom.Rectangle2D big = gp.path.getBounds2D();
+            java.awt.geom.Area ring = new java.awt.geom.Area(new Rectangle2D.Double(big.getX() - 50, big.getY() - 50, big.getWidth() + 100, big.getHeight() + 100));
+            ring.subtract(new java.awt.geom.Area(at.createTransformedShape(gp.path)));
+            for (int i = BLUR_STEPS; i >= 1; i--) cv.stroke(at.createTransformedShape(gp.path), roundStroke(blur * i / BLUR_STEPS), withAlpha(c, a * 0.4 / BLUR_STEPS));
+            cv.fill(ring, withAlpha(c, a * 0.5));
+            cv.restore();
+            if (outside.isEmpty()) continue;
+        }
+    }
+
+    /** 面取り (sp3d/bevelT): 上と左の縁を明るく、下と右の縁を暗くする。 */
+    private void paintBevel(PdfCanvas cv, Element sp3d, List<GeoPath> paths) throws IOException {
+        Element bt = Xml.child(sp3d, "bevelT");
+        if (bt == null) return;
+        double w = Xml.longAttr(bt, "w", 76200) / EMU;
+        if (w <= 0) return;
+        for (GeoPath gp : paths) {
+            if (!gp.fill) continue;
+            cv.save();
+            cv.clip(gp.path);
+            AffineTransform dn = AffineTransform.getTranslateInstance(w * 0.5, w * 0.5), up = AffineTransform.getTranslateInstance(-w * 0.5, -w * 0.5);
+            cv.stroke(dn.createTransformedShape(gp.path), roundStroke(w * 1.2), withAlpha(Color.WHITE, 0.35));
+            cv.stroke(up.createTransformedShape(gp.path), roundStroke(w * 1.2), withAlpha(Color.BLACK, 0.25));
+            cv.restore();
+        }
+    }
+
+    /** 反射: 図形を下の辺で上下に反転し、上から下へ薄くなる像を描く (stA から endA まで、endPos の位置で終わる)。 */
+    private void paintReflection(PdfCanvas cv, Element rf, List<GeoPath> paths, Paint fill, Rectangle2D r) throws IOException {
+        if (rf == null || fill == null || fill.color == null) return;
+        double stA = Xml.longAttr(rf, "stA", 100000) / 100000.0, endA = Xml.longAttr(rf, "endA", 0) / 100000.0;
+        double endPos = Xml.longAttr(rf, "endPos", 100000) / 100000.0, dist = Xml.longAttr(rf, "dist", 0) / EMU;
+        AffineTransform flip = new AffineTransform(1, 0, 0, -1, 0, 2 * r.getMaxY() + dist);
+        double y0 = r.getMaxY() + dist, h = r.getHeight() * endPos;
+        int n = 16;
+        for (GeoPath gp : paths) {
+            if (!gp.fill) continue;
+            java.awt.Shape m = flip.createTransformedShape(gp.path);
+            for (int k = 0; k < n; k++) {
+                double a = stA + (endA - stA) * (k + 0.5) / n;
+                cv.save();
+                cv.clipRect(r.getX() - 10, y0 + h * k / n, r.getWidth() + 20, h / n + 0.05);
+                cv.fill(m, withAlpha(fill.color, a * fill.color.getAlpha() / 255.0));
+                cv.restore();
+            }
         }
     }
 
@@ -972,6 +1561,24 @@ public final class DrawingPainter {
         if (fe != null) {
             Paint p = paint(fe, null, null);
             for (GeoPath gp : paths) if (gp.fill) fillShape(cv, gp.path, p, gp.mod);
+        }
+        byte[] svg = alpha < 1 ? null : svgData(blip);
+        if (svg != null) {
+            // SVG の画像: ベクターのまま描く (切り取りは画像全体の矩形を広げて枠で切る)。読めなければ代わりの画像
+            cv.save();
+            if (!isRect && !paths.isEmpty()) cv.clip(paths.get(0).path);
+            Rectangle2D full = r;
+            if (src != null) {
+                double fw = 1 - src[0] - src[2], fh = 1 - src[1] - src[3];
+                if (fw > 0 && fh > 0) {
+                    cv.clipRect(r.getX(), r.getY(), r.getWidth(), r.getHeight());
+                    full = new Rectangle2D.Double(r.getX() - src[0] * r.getWidth() / fw, r.getY() - src[1] * r.getHeight() / fh,
+                            r.getWidth() / fw, r.getHeight() / fh);
+                }
+            }
+            boolean ok = SvgPainter.paint(ctx, cv, svg, full);
+            cv.restore();
+            if (ok) img = null;
         }
         if (img != null) {
             cv.save();
@@ -1021,6 +1628,23 @@ public final class DrawingPainter {
         Element gd = Xml.path(gf, "graphic", "graphicData");
         if (gd == null) return;
         for (Element c : Xml.children(gd)) {
+            if ("timeslicer".equals(c.getLocalName())) {
+                try {
+                    new TimelinePainter(ctx, sheet).paint(cv, c.getAttribute("name"), r);
+                } catch (Exception e) {
+                    Warnings.add("タイムラインを描けませんでした", e);
+                }
+                continue;
+            }
+            if ("slicer".equals(c.getLocalName())) {
+                // スライサー: 定義はシートの slicers とブックの slicerCache にある
+                try {
+                    new SlicerPainter(ctx, sheet).paint(cv, c.getAttribute("name"), r);
+                } catch (Exception e) {
+                    Warnings.add("スライサーを描けませんでした", e);
+                }
+                continue;
+            }
             String rid = c.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id");
             if (rid.isEmpty()) rid = c.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "dm");
             if (rid.isEmpty()) continue;
@@ -1028,21 +1652,35 @@ public final class DrawingPainter {
                 PackageRelationship rel = drawingPart.getRelationship(rid);
                 if (rel == null) continue;
                 PackagePart part = drawingPart.getRelatedPart(rel);
-                if ("chart".equals(c.getLocalName())) {
+                if ("chart".equals(c.getLocalName()) && part.getPartName().getName().toLowerCase(java.util.Locale.ROOT).contains("chartex")) {
+                    new ChartExPainter(ctx, part).paint(cv, r);
+                } else if ("chart".equals(c.getLocalName())) {
                     new ChartPainter(ctx, this, part).paint(cv, r);
                 } else if ("relIds".equals(c.getLocalName())) {
                     paintDiagram(cv, part, r);
                 }
             } catch (Exception e) {
                 // 対応していないフレーム
+                Warnings.add("グラフまたは SmartArt を描けませんでした", e);
             }
         }
     }
 
     /** SmartArt を描く: Excel はデータモデルの隣に描画済みの図形 (dsp) を保存している。 */
     private void paintDiagram(PdfCanvas cv, PackagePart dataPart, Rectangle2D r) throws Exception {
+        // この SmartArt の描画: データの dsp:dataModelExt の relId (シートの描画からの関係) が指す部分。
+        // 見つからなければ、最初の diagramDrawing を使う (古いファイル)
+        String own = null;
+        if (dataPart != null) {
+            try (InputStream in = dataPart.getInputStream()) {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("dataModelExt[^>]*relId=\"([^\"]+)\"")
+                        .matcher(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                if (m.find()) own = m.group(1);
+            }
+        }
         for (PackageRelationship rel : drawingPart.getRelationships()) {
             if (!rel.getRelationshipType().endsWith("/diagramDrawing")) continue;
+            if (own != null && !own.equals(rel.getId()) && drawingPart.getRelationship(own) != null) continue;
             PackagePart dp = drawingPart.getRelatedPart(rel);
             Element root;
             try (InputStream in = dp.getInputStream()) {

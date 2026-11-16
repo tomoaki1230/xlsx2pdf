@@ -35,6 +35,7 @@ final class CellImages {
         try {
             load(wb.getPackage());
         } catch (Exception e) {
+            Warnings.add("セルに配置した画像を読めませんでした", e);
             byVm.clear();
             names.clear();
         }

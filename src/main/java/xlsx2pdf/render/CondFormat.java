@@ -16,7 +16,6 @@ import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.ColorScaleFormatting;
 import org.apache.poi.ss.usermodel.ConditionType;
 import org.apache.poi.ss.usermodel.ConditionalFormattingThreshold;
-import org.apache.poi.ss.usermodel.DataBarFormatting;
 import org.apache.poi.ss.usermodel.FontFormatting;
 import org.apache.poi.ss.usermodel.PatternFormatting;
 import org.apache.poi.ss.usermodel.Row;
@@ -29,18 +28,23 @@ import org.apache.poi.xssf.usermodel.XSSFSheet;
 public final class CondFormat {
     /** 1 つのセルに適用する条件付き書式 (null の項目は元の書式のまま)。 */
     public static final class Result {
-        /** 塗りつぶし色・文字色・データバーの色。 */
-        public Color fill, fontColor, dataBar;
+        /** 塗りつぶし色・文字色。 */
+        public Color fill, fontColor;
+        /** 網掛けの塗り (patBits が 0 でなければ有効。模様は CellPainter.PATTERNS、前景色・背景色)。 */
+        public long patBits;
+        public Color patFg, patBg;
         /** 太字・斜体・取り消し線。 */
         public Boolean bold, italic, strike;
-        /** データバーの長さ (セル幅に対する割合)。 */
-        public double dataBarFraction;
         /** 値を表示しない (データバーのみ)。 */
         public boolean hideText;
         /** 罫線 (上・右・下・左)。 */
         public Edge[] borders;
         /** 表示形式 (なければ null)。 */
         public String numFmt;
+        /** アイコンセットのアイコン (なければ null)。 */
+        IconSets.Icon icon;
+        /** データバー (なければ null)。 */
+        DataBars.Bar bar;
     }
 
     /**
@@ -58,6 +62,11 @@ public final class CondFormat {
     private org.apache.poi.ss.formula.BaseFormulaEvaluator fe;
     /** シートに条件付き書式があるか。 */
     private final boolean any;
+    /** アイコンセット・データバー (拡張の規則を含む。なければ null)。 */
+    private IconSets icons;
+    private DataBars bars;
+    /** 拡張 (x14) の書式の規則 (数式・セルの値・文字列を含むなど。優先順位の順。なければ空)。 */
+    private final List<CfExt.X14Rule> x14fmt = new ArrayList<>();
     /** セル (行 × 16384 + 列) ごとの評価結果。 */
     private final Map<Long, Result> cache = new HashMap<>();
     /** 規則ごとの、適用範囲の数値 (昇順)。 */
@@ -68,11 +77,26 @@ public final class CondFormat {
         this.ctx = ctx;
         this.sheet = sheet;
         this.any = sheet.getSheetConditionalFormatting().getNumConditionalFormattings() > 0;
+        try {
+            List<CfExt.X14Rule> x14 = CfExt.x14Rules(sheet);
+            icons = IconSets.parse(sheet, x14);
+            bars = DataBars.parse(sheet, x14, this::xmlColor);
+            if (X14_FMT) {
+                for (CfExt.X14Rule xr : x14) {
+                    String ty = xr.rule().getAttribute("type");
+                    if (!ty.equals("dataBar") && !ty.equals("iconSet") && !ty.equals("colorScale") && Xml.child(xr.rule(), "dxf") != null) x14fmt.add(xr);
+                }
+                x14fmt.sort(java.util.Comparator.comparingInt(xr -> Xml.intAttr(xr.rule(), "priority", Integer.MAX_VALUE)));
+            }
+        } catch (RuntimeException e) {
+            Warnings.add("アイコンセット・データバーを読めませんでした", e);
+        }
         if (any) {
             try {
                 fe = (org.apache.poi.ss.formula.BaseFormulaEvaluator) ctx.wb.getCreationHelper().createFormulaEvaluator();
                 eval = new ConditionalFormattingEvaluator(ctx.wb, (org.apache.poi.ss.formula.WorkbookEvaluatorProvider) fe);
             } catch (RuntimeException e) {
+                Warnings.add("条件付き書式を評価できません", e);
                 eval = null;
             }
         }
@@ -84,17 +108,50 @@ public final class CondFormat {
      * @return 適用する書式。該当しなければ null
      */
     public Result eval(int r, int c) {
-        if (!any || eval == null) return null;
+        if (icons == null && bars == null && x14fmt.isEmpty() && (!any || eval == null)) return null;
         long key = (long) r * 16384 + c;
         if (cache.containsKey(key)) return cache.get(key);
         Result res = null;
-        try {
-            List<EvaluationConditionalFormatRule> rules =
-                    eval.getConditionalFormattingForCell(new CellReference(sheet.getSheetName(), r, c, false, false));
-            rules = withFormulaFilters(rules, r, c);
-            if (!rules.isEmpty()) res = apply(rules, r, c);
-        } catch (RuntimeException | StackOverflowError e) {
-            res = null;
+        if (any && eval != null) {
+            try {
+                List<EvaluationConditionalFormatRule> rules =
+                        eval.getConditionalFormattingForCell(new CellReference(sheet.getSheetName(), r, c, false, false));
+                rules = withFormulaFilters(rules, r, c);
+                if (!rules.isEmpty()) res = apply(rules, r, c);
+            } catch (RuntimeException | StackOverflowError e) {
+                Warnings.add("セル " + new CellReference(r, c).formatAsString() + " の条件付き書式を評価できませんでした", e);
+                res = null;
+            }
+        }
+        if (!x14fmt.isEmpty()) {
+            try {
+                res = applyX14(res, r, c);
+            } catch (RuntimeException | StackOverflowError e) {
+                Warnings.add("セル " + new CellReference(r, c).formatAsString() + " の条件付き書式 (拡張) を評価できませんでした", e);
+            }
+        }
+        if (bars != null) {
+            try {
+                DataBars.Bar b = bars.at(r, c, this::value, f -> formulaNumber(f, r, c));
+                if (b != null) {
+                    if (res == null) res = new Result();
+                    res.bar = b;
+                    res.hideText = b.hideText();
+                }
+            } catch (RuntimeException e) {
+                Warnings.add("セル " + new CellReference(r, c).formatAsString() + " のデータバーを評価できませんでした", e);
+            }
+        }
+        if (icons != null) {
+            try {
+                IconSets.Icon ic = icons.at(r, c, this::value, f -> formulaNumber(f, r, c));
+                if (ic != null && IconPainter.known(ic.set())) {
+                    if (res == null) res = new Result();
+                    res.icon = ic;
+                }
+            } catch (RuntimeException e) {
+                Warnings.add("セル " + new CellReference(r, c).formatAsString() + " のアイコンセットを評価できませんでした", e);
+            }
         }
         cache.put(key, res);
         return res;
@@ -200,6 +257,112 @@ public final class CondFormat {
         return f != null && !f.isBlank();
     }
 
+    /** 拡張 (x14) の書式の規則を使うか。 */
+    static final boolean X14_FMT = !"0".equals(System.getProperty("x2p.x14fmt"));
+
+    /**
+     * 拡張 (x14:cfRule) の書式の規則をセルに適用する。ほかのシートを参照する数式の規則などは、Excel が拡張の側に保存する
+     * (夜間 n1367・n3839: 表紙!$E$9<>"✓" で全面を網掛けにする)。数式 (xm:f) は適用範囲を囲む範囲の左上を基準にずらして評価する。
+     * 種類が cellIs のものはセルの値と比べ、それ以外 (expression・containsText など) は 1 つ目の数式の真偽で判定する。
+     * 通常の規則で決まった項目は上書きしない。
+     */
+    private Result applyX14(Result res, int r, int c) {
+        for (CfExt.X14Rule xr : x14fmt) {
+            if (!CfExt.in(xr.ranges(), r, c)) continue;
+            org.w3c.dom.Element rule = xr.rule();
+            List<org.w3c.dom.Element> fs = Xml.children(rule, "f");
+            if (fs.isEmpty()) continue;
+            CellRangeAddress base = bounds(xr.ranges().toArray(new CellRangeAddress[0]));
+            int dr = r - base.getFirstRow(), dc = c - base.getFirstColumn();
+            boolean hit;
+            if (rule.getAttribute("type").equals("cellIs")) {
+                Double v = value(r, c), a = formulaNumber(shiftFormula(Xml.text(fs.get(0)), dr, dc), r, c);
+                Double b = fs.size() > 1 ? formulaNumber(shiftFormula(Xml.text(fs.get(1)), dr, dc), r, c) : null;
+                if (v == null || a == null) continue;
+                hit = switch (rule.getAttribute("operator")) {
+                    case "equal" -> v.doubleValue() == a;
+                    case "notEqual" -> v.doubleValue() != a;
+                    case "greaterThan" -> v > a;
+                    case "greaterThanOrEqual" -> v >= a;
+                    case "lessThan" -> v < a;
+                    case "lessThanOrEqual" -> v <= a;
+                    case "between" -> b != null && v >= Math.min(a, b) && v <= Math.max(a, b);
+                    case "notBetween" -> b != null && (v < Math.min(a, b) || v > Math.max(a, b));
+                    default -> false;
+                };
+            } else {
+                hit = formulaTrue(shiftFormula(Xml.text(fs.get(0)), dr, dc), r, c);
+            }
+            if (!hit) continue;
+            if (res == null) res = new Result();
+            applyDxf(res, Xml.child(rule, "dxf"));
+            if (Xml.boolAttr(rule, "stopIfTrue", false)) break;
+        }
+        return res;
+    }
+
+    /** 数式の真偽 (評価できなければ偽)。 */
+    private boolean formulaTrue(String f, int r, int c) {
+        try {
+            if (fe == null) fe = (org.apache.poi.ss.formula.BaseFormulaEvaluator) ctx.wb.getCreationHelper().createFormulaEvaluator();
+            org.apache.poi.ss.formula.eval.ValueEval v = fe._getWorkbookEvaluator().evaluate(f,
+                    new CellReference(sheet.getSheetName(), r, c, false, false), new CellRangeAddress(r, r, c, c));
+            v = org.apache.poi.ss.formula.eval.OperandResolver.getSingleValue(v, r, c);
+            return v instanceof org.apache.poi.ss.formula.eval.BoolEval b ? b.getBooleanValue()
+                    : v instanceof org.apache.poi.ss.formula.eval.NumberEval n && n.getNumberValue() != 0;
+        } catch (RuntimeException | org.apache.poi.ss.formula.eval.EvaluationException e) {
+            return false;
+        }
+    }
+
+    /** 拡張の規則の差分書式 (x14:dxf) の塗り・フォント・罫線・表示形式を、まだ決まっていない項目に入れる。 */
+    private void applyDxf(Result res, org.w3c.dom.Element dxf) {
+        org.w3c.dom.Element pf = Xml.path(dxf, "fill", "patternFill");
+        if (pf != null && res.fill == null && res.patBits == 0) {
+            String pt = Xml.attr(pf, "patternType", "solid");
+            org.w3c.dom.Element fgE = Xml.child(pf, "fgColor"), bgE = Xml.child(pf, "bgColor");
+            Color fg = fgE == null ? null : Xml.boolAttr(fgE, "auto", false) ? Color.BLACK : xmlColor(fgE);
+            Color bg = bgE == null ? null : Xml.boolAttr(bgE, "auto", false) ? Color.WHITE : xmlColor(bgE);
+            Long bits = CellPainter.PATTERNS.get(pt);
+            if (pt.equals("solid")) res.fill = bg != null ? bg : fg;
+            else if (bits != null) {
+                res.patBits = bits;
+                res.patFg = fg != null ? fg : Color.BLACK;
+                res.patBg = bg != null ? bg : Color.WHITE;
+            }
+        }
+        org.w3c.dom.Element font = Xml.child(dxf, "font");
+        if (font != null) {
+            org.w3c.dom.Element col = Xml.child(font, "color");
+            if (res.fontColor == null && col != null) res.fontColor = Xml.boolAttr(col, "auto", false) ? Color.BLACK : xmlColor(col);
+            if (res.bold == null && Xml.child(font, "b") != null) res.bold = Xml.boolAttr(Xml.child(font, "b"), "val", true);
+            if (res.italic == null && Xml.child(font, "i") != null) res.italic = Xml.boolAttr(Xml.child(font, "i"), "val", true);
+            if (res.strike == null && Xml.child(font, "strike") != null) res.strike = Xml.boolAttr(Xml.child(font, "strike"), "val", true);
+        }
+        org.w3c.dom.Element nf = Xml.child(dxf, "numFmt");
+        if (res.numFmt == null && nf != null && nf.hasAttribute("formatCode")) res.numFmt = nf.getAttribute("formatCode");
+        org.w3c.dom.Element bd = Xml.child(dxf, "border");
+        if (bd != null) {
+            String[] sides = {"top", "right", "bottom", "left"};
+            for (int i = 0; i < 4; i++) {
+                org.w3c.dom.Element e = Xml.child(bd, sides[i]);
+                if (e == null || !e.hasAttribute("style")) continue;
+                BorderStyle bs;
+                try {
+                    bs = BorderStyle.valueOf(e.getAttribute("style").replaceAll("([A-Z])", "_$1").toUpperCase(java.util.Locale.ROOT));
+                } catch (IllegalArgumentException ex) {
+                    continue;
+                }
+                if (res.borders == null) res.borders = new Edge[4];
+                if (res.borders[i] == null) {
+                    org.w3c.dom.Element col = Xml.child(e, "color");
+                    Color cc = col == null || Xml.boolAttr(col, "auto", false) ? Color.BLACK : xmlColor(col);
+                    res.borders[i] = new Edge(bs, cc != null ? cc : Color.BLACK);
+                }
+            }
+        }
+    }
+
     /** POI の色を AWT の色にする (テーマ色を解決する)。 */
     private Color color(org.apache.poi.ss.usermodel.Color c) {
         if (c instanceof XSSFColor xc) {
@@ -225,32 +388,23 @@ public final class CondFormat {
                 }
                 continue;
             }
-            if (t == ConditionType.DATA_BAR) {
-                if (res.dataBar == null) {
-                    DataBarFormatting db = rule.getDataBarFormatting();
-                    Double v = value(r, c);
-                    double[] mm = minMax(er);
-                    if (v != null && mm != null && db != null) {
-                        double lo = threshold(db.getMinThreshold(), mm, er, true);
-                        double hi = threshold(db.getMaxThreshold(), mm, er, false);
-                        double frac = hi > lo ? (v - lo) / (hi - lo) : 1;
-                        double minW = db.getWidthMin() / 100.0, maxW = db.getWidthMax() == 0 ? 0.9 : db.getWidthMax() / 100.0;
-                        res.dataBarFraction = minW + Math.max(0, Math.min(1, frac)) * (maxW - minW);
-                        res.dataBar = color(db.getColor());
-                        if (res.dataBar == null) res.dataBar = new Color(0x638EC6);
-                        res.hideText = db.isIconOnly();
-                        hit = true;
-                    }
-                }
-                continue;
-            }
+            // データバーとアイコンセットは DataBars・IconSets で扱う
+            if (t == ConditionType.DATA_BAR) continue;
             if (t == ConditionType.ICON_SET) continue;
             if (res.numFmt == null && rule.getNumberFormat() != null && rule.getNumberFormat().getFormat() != null) {
                 res.numFmt = rule.getNumberFormat().getFormat();
                 hit = true;
             }
             PatternFormatting pf = rule.getPatternFormatting();
-            if (pf != null && res.fill == null) {
+            if (pf != null && res.fill == null && res.patBits == 0 && X14_FMT && pf.getFillPattern() > 1 && pf.getFillPattern() < CellPainter.PATTERN_NAMES.length
+                    && CellPainter.PATTERNS.get(CellPainter.PATTERN_NAMES[pf.getFillPattern()]) != null) {
+                // 網掛けの塗り (dxf の patternType が solid 以外): セルの網掛けと同じ模様で描く (夜間 n1367)
+                res.patBits = CellPainter.PATTERNS.get(CellPainter.PATTERN_NAMES[pf.getFillPattern()]);
+                Color fg = color(pf.getFillForegroundColorColor()), bg = color(pf.getFillBackgroundColorColor());
+                res.patFg = fg != null ? fg : Color.BLACK;
+                res.patBg = bg != null ? bg : Color.WHITE;
+                hit = true;
+            } else if (pf != null && res.fill == null && res.patBits == 0) {
                 Color col = color(pf.getFillBackgroundColorColor());
                 if (col == null) col = color(pf.getFillForegroundColorColor());
                 if (col != null) { res.fill = col; hit = true; }
@@ -261,9 +415,9 @@ public final class CondFormat {
                     Color col = color(ff.getFontColor());
                     if (col != null) { res.fontColor = col; hit = true; }
                 }
-                if (res.bold == null && isSet(ff, "b")) { res.bold = ff.isBold(); hit = true; }
-                if (res.italic == null && isSet(ff, "i")) { res.italic = ff.isItalic(); hit = true; }
-                if (res.strike == null && isSet(ff, "strike")) { res.strike = ff.isStruckout(); hit = true; }
+                if (res.bold == null && isSet(er, "b")) { res.bold = ff.isBold(); hit = true; }
+                if (res.italic == null && isSet(er, "i")) { res.italic = ff.isItalic(); hit = true; }
+                if (res.strike == null && isSet(er, "strike")) { res.strike = ff.isStruckout(); hit = true; }
             }
             BorderFormatting bf = rule.getBorderFormatting();
             if (bf != null) {
@@ -279,23 +433,26 @@ public final class CondFormat {
         return hit ? res : null;
     }
 
-    /** フォント書式で b / i / strike が指定されているか (POI が公開していないため内部の CTFont を見る)。 */
-    private static boolean isSet(FontFormatting ff, String what) {
-        if (ff instanceof org.apache.poi.xssf.usermodel.XSSFFontFormatting x) {
-            try {
-                java.lang.reflect.Field f = x.getClass().getDeclaredField("_font");
-                f.setAccessible(true);
-                var ct = (org.openxmlformats.schemas.spreadsheetml.x2006.main.CTFont) f.get(x);
-                return switch (what) {
-                    case "b" -> ct.sizeOfBArray() > 0;
-                    case "i" -> ct.sizeOfIArray() > 0;
-                    default -> ct.sizeOfStrikeArray() > 0;
-                };
-            } catch (ReflectiveOperationException | RuntimeException e) {
-                return false;
-            }
-        }
-        return false;
+    /**
+     * フォント書式で b / i / strike が指定されているか。POI の FontFormatting は未指定と false を区別しないので、
+     * 規則の dxf (シートの cfRule の dxfId が指すスタイルの差分書式) のフォントを見る。
+     */
+    private boolean isSet(EvaluationConditionalFormatRule er, String what) {
+        var ws = sheet.getCTWorksheet();
+        int f = er.getFormattingIndex(), r = er.getRuleIndex();
+        if (f < 0 || f >= ws.sizeOfConditionalFormattingArray()) return false;
+        var cf = ws.getConditionalFormattingArray(f);
+        if (r < 0 || r >= cf.sizeOfCfRuleArray()) return false;
+        var rule = cf.getCfRuleArray(r);
+        if (!rule.isSetDxfId()) return false;
+        var dxf = ctx.wb.getStylesSource().getDxfAt((int) rule.getDxfId());
+        if (dxf == null || !dxf.isSetFont()) return false;
+        var font = dxf.getFont();
+        return switch (what) {
+            case "b" -> font.sizeOfBArray() > 0;
+            case "i" -> font.sizeOfIArray() > 0;
+            default -> font.sizeOfStrikeArray() > 0;
+        };
     }
 
     /** 罫線の 1 辺を設定する (未設定の辺だけ)。 */
@@ -306,6 +463,50 @@ public final class CondFormat {
     }
 
     /** セルの数値 (数式はキャッシュされた結果)。数値でなければ null。 */
+    /**
+     * 色の指定 (通常の規則の CTColor、拡張の x14:fillColor などの要素) を AWT の色にする。
+     *
+     * @return 色。指定がなければ null
+     */
+    private Color xmlColor(Object o) {
+        try {
+            org.openxmlformats.schemas.spreadsheetml.x2006.main.CTColor ct;
+            if (o instanceof org.openxmlformats.schemas.spreadsheetml.x2006.main.CTColor c) ct = c;
+            else if (o instanceof org.w3c.dom.Element e) {
+                ct = org.openxmlformats.schemas.spreadsheetml.x2006.main.CTColor.Factory.newInstance();
+                if (e.hasAttribute("rgb")) ct.setRgb(java.util.HexFormat.of().parseHex(e.getAttribute("rgb")));
+                if (e.hasAttribute("theme")) ct.setTheme(Long.parseLong(e.getAttribute("theme")));
+                if (e.hasAttribute("indexed")) ct.setIndexed(Long.parseLong(e.getAttribute("indexed")));
+                if (e.hasAttribute("tint")) ct.setTint(Double.parseDouble(e.getAttribute("tint")));
+                if (e.hasAttribute("auto")) ct.setAuto(Xml.boolAttr(e, "auto", false));
+            } else return null;
+            return color(XSSFColor.from(ct, ctx.wb.getStylesSource().getIndexedColors()));
+        } catch (RuntimeException e) {
+            Warnings.add("条件付き書式の色を読めませんでした", e);
+            return null;
+        }
+    }
+
+    /** しきい値の数式を評価した数値 (評価できなければ null)。 */
+    private Double formulaNumber(String f, int r, int c) {
+        if (fe == null) {
+            try {
+                fe = (org.apache.poi.ss.formula.BaseFormulaEvaluator) ctx.wb.getCreationHelper().createFormulaEvaluator();
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }
+        try {
+            org.apache.poi.ss.formula.eval.ValueEval v = fe._getWorkbookEvaluator().evaluate(f,
+                    new CellReference(sheet.getSheetName(), r, c, false, false), new CellRangeAddress(r, r, c, c));
+            // セルの参照 ($G$1 など) は値を取り出す
+            v = org.apache.poi.ss.formula.eval.OperandResolver.getSingleValue(v, r, c);
+            return v instanceof org.apache.poi.ss.formula.eval.NumberEval n ? n.getNumberValue() : null;
+        } catch (RuntimeException | org.apache.poi.ss.formula.eval.EvaluationException e) {
+            return null;
+        }
+    }
+
     private Double value(int r, int c) {
         Row row = sheet.getRow(r);
         if (row == null) return null;
@@ -344,12 +545,15 @@ public final class CondFormat {
     }
 
     /** カラースケール・データバーのしきい値を値にする (最小・最大・数値・パーセント・百分位)。 */
-    private double threshold(ConditionalFormattingThreshold th, double[] mm, EvaluationConditionalFormatRule er, boolean isMin) {
+    private double threshold(ConditionalFormattingThreshold th, double[] mm, EvaluationConditionalFormatRule er, boolean isMin, int r, int c) {
         if (th == null) return isMin ? mm[0] : mm[1];
         Double val = th.getValue();
         if (val == null && th.getFormula() != null) {
-            try { val = Double.parseDouble(th.getFormula()); } catch (NumberFormatException e) { val = null; }
+            String f = th.getFormula().trim();
+            if (f.startsWith("=")) f = f.substring(1);
+            try { val = Double.parseDouble(f); } catch (NumberFormatException e) { val = formulaNumber(f, r, c); } // 数式は評価する (exp77)
         }
+        if (th.getRangeType() == ConditionalFormattingThreshold.RangeType.FORMULA) return val != null ? val : (isMin ? mm[0] : mm[1]);
         return switch (th.getRangeType()) {
             case MIN -> mm[0];
             case MAX -> mm[1];
@@ -381,10 +585,12 @@ public final class CondFormat {
         double[] pos = new double[n];
         Color[] cc = new Color[n];
         for (int i = 0; i < n; i++) {
-            pos[i] = threshold(th[i], mm, er, i == 0);
+            pos[i] = threshold(th[i], mm, er, i == 0, r, c);
             cc[i] = color(cols[i]);
             if (cc[i] == null) cc[i] = Color.WHITE;
         }
+        // 最大以上は最大の色 (全部が同じ値・1 セルだけの範囲も最大の色。Excel の印刷 exp78)
+        if (v >= pos[n - 1]) return cc[n - 1];
         if (v <= pos[0]) return cc[0];
         for (int i = 1; i < n; i++) {
             if (v <= pos[i]) {

@@ -28,6 +28,12 @@ public final class PrinterModel {
 
     /** 作成者の環境に合わせる (--author-env)。false なら今の Excel・表示倍率 100% の PC に合わせる。 */
     public boolean authorEnv;
+    /** 標準フォントの名前 (テーマの日本語フォントと別の書体) の画面の標準行 (px)。同じ書体なら 0。 */
+    public int latinRow;
+    /** Excel 以外のアプリで保存したブック: 手で決めていない行の高さ (ht) は Excel が開くときに測り直す (exp111・113)。 */
+    public boolean nonExcel;
+    /** テーマのフォント (scheme minor / major) の日本語の書体。行の高さはこの書体で決まる (日本語版の Excel)。 */
+    public String minorJpan, majorJpan;
     /** ブックを最後に保存した Excel のバージョン (0 = 不明)。 */
     public int appVersion;
     /** ブックの fileVersion の lastEdited / lowestEdited (Excel の世代。7 = 2016 以降、0 = 不明)。 */
@@ -124,12 +130,36 @@ public final class PrinterModel {
     /** 倍率 1・600 dpi のプリンタの標準行の実測値 (表になければ 0)。 */
     static int measuredPrintRow(String fontName, double size, double scale, int dpi) {
         if (scale != 1 || dpi != 600 || fontName == null) return 0;
-        Integer v = PROW.get(FontManager.norm(fontName) + "|" + size);
-        return v == null ? 0 : v;
+        String key = FontManager.norm(fontName);
+        Integer v = PROW.get(key + "|" + size);
+        if (v != null) return v;
+        if (!PROW_EXTRAPOLATE || isMs(key)) return 0; // MS 系は式 (msRow) が合う (MS 明朝 16pt: mun_461774)
+        // 表にない大きさは、同じフォントの最も近い大きさの値から比例で求める (Times New Roman 16pt: 145 × 16 / 14 = 165。exp46e)
+        double best = -1;
+        int bv = 0;
+        for (var e : PROW.entrySet()) {
+            int bar = e.getKey().lastIndexOf('|');
+            if (!e.getKey().substring(0, bar).equals(key)) continue;
+            double sz = Double.parseDouble(e.getKey().substring(bar + 1));
+            if (best < 0 || Math.abs(sz - size) < Math.abs(best - size)) { best = sz; bv = e.getValue(); }
+        }
+        return best > 0 ? (int) Math.floor(bv * size / best) : 0;
     }
+
+    static boolean PROW_EXTRAPOLATE = Boolean.parseBoolean(System.getProperty("x2p.prowx", "true"));
 
     /** 画面の標準行の実測表 (正規化したフォント名|大きさ|DPI → px)。 */
     private static final java.util.Map<String, Integer> SROW = loadScreenRows();
+    /** 画面の標準行の表にある書体名 (正規化した名前。この PC の Excel が使える書体: クラウドフォントを含む)。 */
+    private static final java.util.Set<String> SROW_FONTS = new java.util.HashSet<>();
+    static {
+        for (String k : SROW.keySet()) SROW_FONTS.add(k.substring(0, k.indexOf('|')));
+    }
+
+    /** 画面の標準行の表にある書体か (正規化した名前)。 */
+    static boolean screenRowFont(String normName) {
+        return SROW_FONTS.contains(normName);
+    }
 
     private static java.util.Map<String, Integer> loadScreenRows() {
         java.util.Map<String, Integer> m = new java.util.HashMap<>();

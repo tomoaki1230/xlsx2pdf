@@ -57,14 +57,30 @@ import xlsx2pdf.render.Paginator;
 import xlsx2pdf.render.PdfCanvas;
 import xlsx2pdf.render.PrintSetup;
 import xlsx2pdf.render.RenderContext;
+import xlsx2pdf.render.FontManager;
 import xlsx2pdf.render.SheetLayout;
 
 /** xlsx ブックを、Excel が印刷するのと同じように PDF に変換する。 */
 public final class Converter {
+    /** 図形・グラフの切り抜きをブロックの外側に広げる幅 (用紙上の pt。セルは罫線のため 2pt)。 */
+    static final double DRAWING_CLIP = 0.44;
+
     /** 変換のオプション。 */
     public static final class Options {
         /** 追加で検索するフォントフォルダ。 */
         public final List<File> fontDirs = new ArrayList<>();
+        /**
+         * フォントの走査結果のキャッシュ (fonts-*.tsv) を置くフォルダ。null (既定) なら ~/.cache/xlsx2pdf。
+         * フォルダがなければ作る。
+         */
+        public File fontCacheDir;
+        /** フォントの走査結果のキャッシュを使わない (読まず、書かない)。変換のたびにフォントファイルを読むので遅くなる。 */
+        public boolean noFontCache;
+        /**
+         * 数式を再計算してから印刷する。既定 (false) は、ファイルに保存された計算結果 (最後に保存したときの値) を使う。
+         * 計算できない数式は保存された結果のまま ({@link xlsx2pdf.render.Recalc})。
+         */
+        public boolean recalc;
         /** 実際の用紙サイズではなく、Excel の PDF のページサイズ (用紙サイズ ÷ 印刷倍率) を使う。 */
         public boolean excelPageSize;
         /** 印刷するシート名 (空ならすべての表示シート)。 */
@@ -98,20 +114,30 @@ public final class Converter {
         public long maxImagePixels = 50_000_000L;
         /** xlsx (zip) の 1 項目の展開後の大きさの上限 (バイト)。既定 1 GB。 */
         public long maxZipEntryBytes = 1L << 30;
-        /** xlsx (zip) の項目の圧縮率の下限 (展開後に対する圧縮後の比。小さすぎるものは zip 爆弾とみなす)。既定 0.01 (POI と同じ)。 */
-        public double minInflateRatio = 0.01;
+        /** xlsx (zip) の項目の数の上限。既定 100,000 (POI の既定 1,000 は、数百のシートがある実際のブックで足りない)。0 以下は無制限。 */
+        public long maxZipEntries = 100_000;
+        /** xlsx (zip) の項目の圧縮率の下限 (展開後に対する圧縮後の比。小さすぎるものは zip 爆弾とみなす)。既定 0.005 (POI の既定 0.01 では、Excel が開く書式の多いブックの styles.xml (先頭の比 0.008。夜間 n4404・n5837) を拒むため)。 */
+        public double minInflateRatio = 0.005;
         /** 変換の時間の上限 (秒)。既定 0 = 無制限。 */
         public long timeoutSeconds;
         /** ストリームの入力の大きさの上限 (バイト)。0 以下は無制限 (配列の大きさの限界まで)。 */
         public long maxInputBytes = 1L << 30;
         /** ストリームから変換するときのブック名 (ヘッダーの &amp;F と PDF のタイトル)。null なら空。 */
         public String sourceName;
+        /**
+         * PDF の編集を禁止する (内容の変更、注釈・フォームの記入、ページの組み替え)。印刷と文字のコピーは許可する。
+         * PDF を開くパスワードは付けない。制限はビューアーが守ることが前提で、改ざんを確実に防ぐものではない。
+         */
+        public boolean noEdit;
+        /** 編集の禁止を解除する権限パスワード。null か空なら、知らせない乱数のパスワードにする。 */
+        public String ownerPassword;
 
         /** すべての上限を外す (メモリが潤沢で、時間を掛けてでも変換したいとき)。 */
         public void noLimits() {
             maxPages = 0;
             maxImagePixels = 0;
             maxZipEntryBytes = 0;
+            maxZipEntries = 0;
             minInflateRatio = 0;
             timeoutSeconds = 0;
             maxInputBytes = 0;
@@ -123,6 +149,20 @@ public final class Converter {
 
     /** 変換の時間の期限 (System.nanoTime。0 = 無制限)。 */
     private long deadline;
+
+    /** 最後の変換の警告。 */
+    private List<String> warnings = List.of();
+    /** 変換中の警告の集め先。 */
+    private xlsx2pdf.render.Warnings collecting;
+
+    /**
+     * 最後の変換の警告の一覧 (描けなかったセル・図形・画像など)。変換は警告があっても最後まで続ける。
+     *
+     * @return 警告の文の一覧 (なければ空)
+     */
+    public synchronized List<String> getWarnings() {
+        return warnings;
+    }
 
     /** 時間の上限を超えていれば変換を中止する。 */
     void checkDeadline() {
@@ -202,6 +242,10 @@ public final class Converter {
             render(in, tmp.toFile());
             try {
                 moveOver(tmp, target);
+                if (xlsx2pdf.render.ValueDump.ON) {   // 値の書き出しも出力の名前に合わせる
+                    Path v = Path.of(tmp + ".values.tsv");
+                    if (Files.exists(v)) Files.move(v, Path.of(target + ".values.tsv"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
             } catch (FileSystemException e) {
                 throw new IOException("出力先に書き込めません (ほかのアプリで開いていないか確認してください): " + target);
             }
@@ -231,7 +275,7 @@ public final class Converter {
         try (OPCPackage pkg = openPackage(book, name)) {
             render(pkg, null, opt.sourceName, doc -> doc.save(pdf));
         }
-        byte[] done = fixToUnicode(pdf.toByteArray());
+        byte[] done = finish(pdf.toByteArray());
         out.write(done);
         out.flush();
     }
@@ -293,10 +337,17 @@ public final class Converter {
     /** ブックを読み、PDF を out に書く。 */
     private void render(File in, File out) throws IOException, InvalidFormatException {
         prepare();
+        xlsx2pdf.render.ValueDump.begin();
         try (OPCPackage pkg = openPackage(in)) {
-            render(pkg, in, in.getName(), doc -> doc.save(out));
+            render(pkg, in, in.getName(), doc -> {
+                // 読み直せない出力先 (デバイスなど) は、ここで編集を禁止する
+                if (out.exists() && !Files.isRegularFile(out.toPath())) protect(doc);
+                doc.save(out);
+            });
         }
-        if (Files.isRegularFile(out.toPath())) fixToUnicode(out);   // デバイスなどは読み直せない
+        if (Files.isRegularFile(out.toPath())) finish(out);   // デバイスなどは読み直せない
+        if (xlsx2pdf.render.ValueDump.ON)
+            Files.write(new File(out.getPath() + ".values.tsv").toPath(), xlsx2pdf.render.ValueDump.take(), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** 完成した PDF の保存先。 */
@@ -308,6 +359,7 @@ public final class Converter {
     private void prepare() {
         applyLimits();
         pagesMade = 0;
+        warnings = List.of();
         deadline = opt.timeoutSeconds > 0 ? System.nanoTime() + opt.timeoutSeconds * 1_000_000_000L : 0;
         if (deadline == 0 && opt.timeoutSeconds > 0) deadline = 1;  // nanoTime がちょうど 0 のとき
     }
@@ -319,44 +371,75 @@ public final class Converter {
      * @param name   ブック名 (&amp;F と PDF のタイトル。なければ null)
      */
     private void render(OPCPackage pkg, File source, String name, PdfSink sink) throws IOException {
-        try (XSSFWorkbook wb = new XSSFWorkbook(pkg);
-             PDDocument doc = new PDDocument()) {
-            RenderContext ctx = new RenderContext(wb, doc, opt.fontDirs, source);
-            ctx.sourceName = name;
-            ctx.printer.authorEnv = opt.authorEnv;
-            ctx.fonts.checkFallbacks();
-            List<SheetJob> jobs = new ArrayList<>();
-            for (int i = 0; i < wb.getNumberOfSheets(); i++) {
-                XSSFSheet sheet = wb.getSheetAt(i);
-                // 非表示のシートは出力しない。ただし --sheet で名前を指定したときは出力する
-                boolean named = opt.sheets.contains(sheet.getSheetName());
-                if ((wb.isSheetHidden(i) || wb.isSheetVeryHidden(i)) && !named) continue;
-                if (!opt.sheets.isEmpty() && !named) continue;
-                if (opt.activeOnly && !sheet.isSelected()) continue;
-                SheetJob job = prepare(ctx, sheet, i);
-                if (job != null) jobs.add(job);
-            }
-            int total = 0;
-            for (SheetJob j : jobs) total += j.pages.size();
-            int pageNo = 0;
-            for (SheetJob j : jobs) {
-                if (j.ps.firstPageNumber != null) pageNo = j.ps.firstPageNumber - 1;
-                HeaderFooter hf = new HeaderFooter(ctx, j.sheet);
-                CellPainter cp = j.chart ? null : new CellPainter(ctx, j.layout, j.ps, new CondFormat(ctx, j.sheet));
-                for (int p = 0; p < j.pages.size(); p++) {
-                    checkDeadline();
-                    pageNo++;
-                    renderPage(ctx, doc, j, j.pages.get(p), p, pageNo, total, hf, cp);
+        collecting = xlsx2pdf.render.Warnings.start();
+        try {
+            try (XSSFWorkbook wb = new XSSFWorkbook(pkg);
+                 PDDocument doc = new PDDocument()) {
+                RenderContext ctx = new RenderContext(wb, doc, opt.fontDirs,
+                        opt.noFontCache ? null : opt.fontCacheDir != null ? opt.fontCacheDir : FontManager.defaultCacheDir(), source);
+                ctx.sourceName = name;
+                ctx.deadline = this::checkDeadline;
+                ctx.printer.authorEnv = opt.authorEnv;
+                ctx.fonts.checkFallbacks();
+                if (opt.recalc) {
+                    xlsx2pdf.render.Recalc.run(wb, this::checkDeadline);
+                    ctx.recalc = true;
                 }
+                List<SheetJob> jobs = new ArrayList<>();
+                for (int i = 0; i < wb.getNumberOfSheets(); i++) {
+                    XSSFSheet sheet = wb.getSheetAt(i);
+                    // 非表示のシートは出力しない。ただし --sheet で名前を指定したときは出力する
+                    boolean named = opt.sheets.contains(sheet.getSheetName());
+                    if ((wb.isSheetHidden(i) || wb.isSheetVeryHidden(i)) && !named) continue;
+                    if (!opt.sheets.isEmpty() && !named) continue;
+                    if (opt.activeOnly && !sheet.isSelected()) continue;
+                    xlsx2pdf.render.Warnings.sheet(sheet.getSheetName());
+                    SheetJob job = prepare(ctx, sheet, i);
+                    if (job != null) jobs.add(job);
+                }
+                int total = 0;
+                // コメントを末尾に印刷するシート (cellComments="atEnd") は、コメントの一覧のページを足す
+                java.util.Map<SheetJob, List<List<String[]>>> notes = new java.util.HashMap<>();
+                for (SheetJob j : jobs) {
+                    total += j.pages.size();
+                    if (!j.chart && "atEnd".equals(j.ps.comments)) {
+                        List<List<String[]>> np = commentPages(ctx, j);
+                        if (!np.isEmpty()) { notes.put(j, np); total += np.size(); }
+                    }
+                }
+                int pageNo = 0;
+                if (xlsx2pdf.render.ValueDump.ON) for (SheetJob j : jobs) dumpValues(j);
+                for (SheetJob j : jobs) {
+                    if (j.ps.firstPageNumber != null) pageNo = j.ps.firstPageNumber - 1;
+                    xlsx2pdf.render.Warnings.sheet(j.sheet.getSheetName());
+                    xlsx2pdf.render.ValueDump.sheet(j.sheet.getSheetName());
+                    HeaderFooter hf = new HeaderFooter(ctx, j.sheet);
+                    CellPainter cp = j.chart ? null : new CellPainter(ctx, j.layout, j.ps, new CondFormat(ctx, j.sheet));
+                    for (int p = 0; p < j.pages.size(); p++) {
+                        checkDeadline();
+                        pageNo++;
+                        renderPage(ctx, doc, j, j.pages.get(p), p, pageNo, total, hf, cp);
+                    }
+                    List<List<String[]>> np = notes.get(j);
+                    if (np != null) {
+                        for (int p = 0; p < np.size(); p++) {
+                            pageNo++;
+                            renderCommentPage(ctx, doc, j, np.get(p), j.pages.size() + p, pageNo, total, hf);
+                        }
+                    }
+                }
+                if (doc.getNumberOfPages() == 0) {
+                    // Excel は空のブックを印刷しない。有効な PDF にするため白紙を 1 ページ出す
+                    doc.addPage(new PDPage(PDRectangle.A4));
+                }
+                PDDocumentInformation info = doc.getDocumentInformation();
+                info.setProducer("xlsx2pdf");
+                if (name != null) info.setTitle(name);
+                sink.save(doc);
             }
-            if (doc.getNumberOfPages() == 0) {
-                // Excel は空のブックを印刷しない。有効な PDF にするため白紙を 1 ページ出す
-                doc.addPage(new PDPage(PDRectangle.A4));
-            }
-            PDDocumentInformation info = doc.getDocumentInformation();
-            info.setProducer("xlsx2pdf");
-            if (name != null) info.setTitle(name);
-            sink.save(doc);
+        } finally {
+            warnings = collecting.list();
+            xlsx2pdf.render.Warnings.stop();
         }
     }
 
@@ -365,9 +448,9 @@ public final class Converter {
      * グリフの最小のコードポイントを使う。CJK フォントは「氏」などを康煕部首 (U+2F52) からも対応付けているため、
      * コピーした文字列が部首になってしまう。対応先が U+2E80〜U+2FDF のものを NFKC の文字に書き換える。
      */
-    static void fixToUnicode(File pdf) throws IOException {
+    private void finish(File pdf) throws IOException {
         try (PDDocument d = Loader.loadPDF(pdf)) {
-            if (fixToUnicode(d)) {
+            if (fixToUnicode(d) | protect(d)) {
                 Path target = pdf.toPath().toAbsolutePath();
                 Path tmp = uniqueTemp(target);
                 try {
@@ -382,14 +465,39 @@ public final class Converter {
         }
     }
 
-    /** メモリの PDF の ToUnicode を直す ({@link #fixToUnicode(File)} と同じ)。 */
-    private static byte[] fixToUnicode(byte[] pdf) throws IOException {
+    /** メモリの PDF を仕上げる ({@link #finish(File)} と同じ)。 */
+    private byte[] finish(byte[] pdf) throws IOException {
         try (PDDocument d = Loader.loadPDF(pdf)) {
-            if (!fixToUnicode(d)) return pdf;
+            if (!(fixToUnicode(d) | protect(d))) return pdf;
             java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream(pdf.length);
             d.save(o);
             return o.toByteArray();
         }
+    }
+
+    /**
+     * 編集の禁止を設定する ({@link Options#noEdit})。暗号化は AES-256。
+     *
+     * @return 設定したか
+     */
+    private boolean protect(PDDocument d) throws IOException {
+        if (!opt.noEdit) return false;
+        org.apache.pdfbox.pdmodel.encryption.AccessPermission ap = new org.apache.pdfbox.pdmodel.encryption.AccessPermission();
+        ap.setCanModify(false);
+        ap.setCanModifyAnnotations(false);
+        ap.setCanFillInForm(false);
+        ap.setCanAssembleDocument(false);
+        String owner = opt.ownerPassword;
+        if (owner == null || owner.isEmpty()) {
+            byte[] r = new byte[24];
+            new java.security.SecureRandom().nextBytes(r);
+            owner = java.util.HexFormat.of().formatHex(r);
+        }
+        org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy p =
+                new org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy(owner, "", ap);
+        p.setEncryptionKeyLength(256);
+        d.protect(p);
+        return true;
     }
 
     /** 文書の ToUnicode を直す。@return 変更したか */
@@ -443,16 +551,36 @@ public final class Converter {
     private void applyLimits() {
         org.apache.poi.openxml4j.util.ZipSecureFile.setMaxEntrySize(opt.maxZipEntryBytes > 0 ? opt.maxZipEntryBytes : 0xFFFFFFFFL);
         org.apache.poi.openxml4j.util.ZipSecureFile.setMinInflateRatio(Math.max(0, opt.minInflateRatio));
+        org.apache.poi.openxml4j.util.ZipSecureFile.setMaxFileCount(opt.maxZipEntries > 0 ? opt.maxZipEntries : Long.MAX_VALUE);
         xlsx2pdf.render.Images.setMaxPixels(opt.maxImagePixels);
         org.apache.poi.util.IOUtils.setByteArrayMaxOverride(opt.maxZipEntryBytes <= 0 ? Integer.MAX_VALUE - 8 : -1);
     }
+
+    /** Strict OOXML のブックを読む (名前空間を書き換える)。 */
+    static final boolean STRICT_OOXML = !"0".equals(System.getProperty("x2p.strict"));
 
     private OPCPackage openPackage(File in) throws IOException, InvalidFormatException {
         FileMagic magic;
         try (InputStream is = FileMagic.prepareToCheckMagic(new java.io.BufferedInputStream(new java.io.FileInputStream(in)))) {
             magic = FileMagic.valueOf(is);
         }
-        if (magic != FileMagic.OLE2) return OPCPackage.open(in, PackageAccess.READ);
+        if (magic != FileMagic.OLE2) {
+            // Strict OOXML は名前空間を通常の形に書き換えてから開く
+            if (STRICT_OOXML) {
+                boolean strict;
+                try (InputStream is = new java.io.BufferedInputStream(new java.io.FileInputStream(in))) {
+                    strict = StrictOoxml.isStrict(is, opt.maxZipEntryBytes);
+                } catch (IOException | RuntimeException e) {
+                    strict = false;
+                }
+                if (strict) {
+                    try (InputStream is = new java.io.BufferedInputStream(new java.io.FileInputStream(in))) {
+                        return OPCPackage.open(new java.io.ByteArrayInputStream(StrictOoxml.toTransitional(is, opt.maxZipEntryBytes, 1L << 30)));
+                    }
+                }
+            }
+            return OPCPackage.open(in, PackageAccess.READ);
+        }
         try (POIFSFileSystem fs = new POIFSFileSystem(in, true)) {
             return decrypt(fs, in.toString());
         }
@@ -464,7 +592,17 @@ public final class Converter {
         try (InputStream is = FileMagic.prepareToCheckMagic(new java.io.ByteArrayInputStream(book))) {
             magic = FileMagic.valueOf(is);
         }
-        if (magic != FileMagic.OLE2) return OPCPackage.open(new java.io.ByteArrayInputStream(book));
+        if (magic != FileMagic.OLE2) {
+            byte[] conv = null;
+            if (STRICT_OOXML) {
+                try {
+                    conv = StrictOoxml.convertIfStrict(book, opt.maxZipEntryBytes);
+                } catch (RuntimeException e) {
+                    conv = null;
+                }
+            }
+            return OPCPackage.open(new java.io.ByteArrayInputStream(conv != null ? conv : book));
+        }
         try (POIFSFileSystem fs = new POIFSFileSystem(new java.io.ByteArrayInputStream(book))) {
             return decrypt(fs, name);
         }
@@ -488,6 +626,29 @@ public final class Converter {
         } catch (java.security.GeneralSecurityException e) {
             throw new IOException(e);
         }
+    }
+
+    /** 値の書き出し (開発用): ページ数・改ページ・画面の行高と列幅 (scripts/dump-excel.ps1 と同じ形)。 */
+    private static void dumpValues(SheetJob j) {
+        xlsx2pdf.render.ValueDump.sheet(j.sheet.getSheetName());
+        java.util.TreeSet<Integer> hb = new java.util.TreeSet<>(), vb = new java.util.TreeSet<>();
+        double scale = 1;
+        for (Paginator.Page p : j.pages) {
+            hb.add(p.bodyR0 + 1);
+            vb.add(p.bodyC0 + 1);
+            scale = p.scale;
+        }
+        if (!hb.isEmpty()) hb.remove(hb.first());
+        if (!vb.isEmpty()) vb.remove(vb.first());
+        String h = hb.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+        String v = vb.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+        xlsx2pdf.render.ValueDump.add("page", j.pages.size(), h, v, scale * 100);
+        if (j.layout == null) return;
+        StringBuilder rows = new StringBuilder(), cols = new StringBuilder();
+        for (int r = 0; r < 300; r++) rows.append(r == 0 ? "" : ",").append(xlsx2pdf.render.ValueDump.fmt(j.layout.screenRowPt(r)));
+        for (int c = 0; c < 60; c++) cols.append(c == 0 ? "" : ",").append(xlsx2pdf.render.ValueDump.fmt(j.layout.screenColPt(c)));
+        xlsx2pdf.render.ValueDump.add("rows", rows);
+        xlsx2pdf.render.ValueDump.add("cols", cols);
     }
 
     /**
@@ -518,12 +679,22 @@ public final class Converter {
         int[] used = SheetLayout.usedRange(sheet, true);
         int[] dext = probe.extent(); // {最終行, 最終列, 先頭行, 先頭列} または null
         if (dext != null) {
-            if (used == null) used = new int[] {dext[2], dext[3], dext[0], dext[1]};
+            // セルに内容がなく図形だけのシートは、Excel は A1 から印刷する (図形の上・左の空きも印刷する)
+            if (used == null) used = new int[] {0, 0, dext[0], dext[1]};
             else {
                 used[0] = Math.min(used[0], dext[2]);
                 used[1] = Math.min(used[1], dext[3]);
                 used[2] = Math.max(used[2], dext[0]);
                 used[3] = Math.max(used[3], dext[1]);
+            }
+        }
+        // スパークラインのセルも使用範囲に含める (値のないセルに描かれることが多い)
+        xlsx2pdf.render.Sparklines.Cells sparks = xlsx2pdf.render.Sparklines.cellsOf(ctx, sheet);
+        for (int[] rc : sparks.list()) {
+            if (used == null) used = new int[] {rc[0], rc[1], rc[0], rc[1]};
+            else {
+                used[0] = Math.min(used[0], rc[0]); used[1] = Math.min(used[1], rc[1]);
+                used[2] = Math.max(used[2], rc[0]); used[3] = Math.max(used[3], rc[1]);
             }
         }
         List<CellRangeAddress> areas = new ArrayList<>();
@@ -559,12 +730,16 @@ public final class Converter {
         boolean ovRange = ps.printAreas.isEmpty();
         if (ovRange) needC += OV_RANGE_COLS;   // 文字のはみ出しで広がる分
         SheetLayout layout = new SheetLayout(sheet, ctx.mdw, ctx.printer, ps.hdpi, ps.vdpi, needR + 1, needC + 1, opt.screenDpi);
-        if (ovRange) {
+        // 数式の表示のシートは、文字のはみ出しで範囲を広げない (exp_showf)
+        if (ovRange && !layout.showFormulas) {
             CellRangeAddress a = areas.get(0);
             int lc = new CellPainter(ctx, layout, ps, new CondFormat(ctx, sheet)).overflowLastColumn(a.getLastRow(), a.getLastColumn(), a.getLastColumn() + OV_RANGE_COLS);
             if (lc > a.getLastColumn()) areas.set(0, new CellRangeAddress(a.getFirstRow(), a.getLastRow(), a.getFirstColumn(), lc));
         }
+        if (System.getProperty("x2p.dbgarea") != null) System.err.println("AREA " + sheet.getSheetName() + " used=" + java.util.Arrays.toString(used) + " dext=" + java.util.Arrays.toString(dext) + " areas=" + areas);
         Paginator paginator = new Paginator(layout, ps);
+        if (ps.headings && ctx.defaultFontName != null)
+            paginator.digitAdvance = ctx.fonts.spec(ctx.defaultFontName, false, false).charWidth('0', (float) ctx.defaultFontSize, ctx.fonts);
         if (opt.maxPages > 0 && pagesMade >= opt.maxPages) {
             throw new LimitExceededException("ページ数が上限 (" + opt.maxPages + ") を超えます (シート「" + sheet.getSheetName() + "」)。--max-pages で上限を変更できます", false);
         }
@@ -575,20 +750,43 @@ public final class Converter {
         checkDeadline();
         if (pages.isEmpty()) return null;
         DrawingPainter dp = new DrawingPainter(ctx, sheet, layout);
+        dp.patternLeft = ps.left;
+        dp.patternTop = ps.top;
         // 今の Excel は印刷範囲を指定したシートでは、何もないページも印刷する
         boolean keepArea = !ps.printAreas.isEmpty() && (!ctx.printer.authorEnv);
         if (pages.size() > 1 && !keepArea) {
             // Excel は何もないページ (本体に値・塗りつぶし・罫線・オブジェクトがない) を印刷しない
             List<Paginator.Page> kept = new ArrayList<>();
             CellPainter spill = new CellPainter(ctx, layout, ps, new CondFormat(ctx, sheet));
-            for (Paginator.Page p : pages) {
+            boolean[] full = new boolean[pages.size()];
+            for (int i = 0; i < pages.size(); i++) {
+                Paginator.Page p = pages.get(i);
                 layout.setScale(p.scale);
                 checkDeadline();
-                if (!blank(sheet, layout, p, dp, spill)) kept.add(p);
+                full[i] = !blank(sheet, layout, p, dp, spill) || sparks.any(p.segments);
+            }
+            for (int i = 0; i < pages.size(); i++) {
+                if (full[i] || laterFull(full, i)) kept.add(pages.get(i));
             }
             if (!kept.isEmpty()) pages = kept;
         }
         return new SheetJob(sheet, index, ps, layout, pages, dp, false);
+    }
+
+    /** 白紙の判定で、結合範囲の左上のセルがあれば中身とみなす (値や罫線がなくても。使用範囲の規則と同じ。夜間 n1111・n0792)。 */
+    static final boolean MERGE_CONTENT = true;
+    static final int MERGE_SPAN = Integer.getInteger("x2p.mspan", 4);
+
+    /** 白紙の判定で、ページの先頭行のセル自身の上の罫線は前のページと共有する辺でも中身と数える (1)。左の罫線は数えない (夜間 n0278)。 */
+    static final int SHARED_EDGE = 1;
+
+    /**
+     * 白紙のページは、シートの最後 (印刷の順) に続くものだけを省く。後ろに中身のあるページがある白紙は印刷する
+     * (夜間 n0172・n0355・n0565・n0033 など。帯ごとに末尾を省く形より合う)。
+     */
+    private static boolean laterFull(boolean[] full, int i) {
+        for (int j = i + 1; j < full.length; j++) if (full[j]) return true;
+        return false;
     }
 
     /**
@@ -611,16 +809,153 @@ public final class Converter {
                 if (!CellPainter.isEmptyCell(cell)) return false;
                 XSSFCellStyle st = cell.getCellStyle();
                 if (st == null) continue;
-                if (st.getFillPattern() != FillPatternType.NO_FILL) return false;
+                if (st.getFillPattern() != FillPatternType.NO_FILL || CellPainter.hasGradient(cell)) return false;
                 if (st.getBorderBottom() != BorderStyle.NONE || st.getBorderRight() != BorderStyle.NONE) return false;
-                if (st.getBorderTop() != BorderStyle.NONE && (r > b.r0 || r == ar0)) return false;
-                if (st.getBorderLeft() != BorderStyle.NONE && (c > b.c0 || c == ac0)) return false;
+                if (st.getBorderTop() != BorderStyle.NONE && (r > b.r0 || r == ar0 || SHARED_EDGE >= 1)) return false;
+                if (st.getBorderLeft() != BorderStyle.NONE && (c > b.c0 || c == ac0 || SHARED_EDGE >= 2)) return false;
+            }
+        }
+        if (MERGE_CONTENT) {
+            // 結合範囲 (値や罫線がなくても) の左上のセルがあるページは白紙としない (夜間 n1111)
+            for (CellRangeAddress m : sheet.getMergedRegions()) {
+                int mr = m.getFirstRow(), mc = m.getFirstColumn();
+                if (mr >= b.r0 && mr <= b.r1 && mc >= b.c0 && mc <= b.c1 && L.rh(mr) > 0 && L.cw(mc) > 0) return false;
+                // 値のある結合範囲が前のページから続くなら、文字の続きが載るので白紙としない (夜間 n1221)
+                if (MERGE_SPAN > 0 && m.getLastRow() >= b.r0 && mr <= b.r1 && m.getLastColumn() >= b.c0 && mc <= b.c1) {
+                    XSSFRow tr = sheet.getRow(mr);
+                    XSSFCell tc = tr == null ? null : tr.getCell(mc);
+                    if (tc != null && !CellPainter.isEmptyCell(tc) && (MERGE_SPAN == 1 || MERGE_SPAN == 3 && mc < b.c0 && mr >= b.r0 || MERGE_SPAN == 4 && mc < b.c0 || mergedTextReaches(L, m, tc, b))) return false;
+                }
             }
         }
         boolean o = dp.hasObjectIn(b.r0, b.c0, b.r1, b.c1);
-        if (!o && spill.hasSpill(b)) return false;
+        if (!o && (spill.hasSpill(b) || spill.hasSlantSpill(b))) return false;
         return !o;
     }
+
+    /**
+     * 結合範囲の文字 (配置と行数の概算) が、ページの行の範囲に届くか。折り返しは文字幅を全角 1em・半角 0.5em として行数を数え、
+     * 行の高さは 1.2em とする。
+     */
+    private static boolean mergedTextReaches(SheetLayout L, CellRangeAddress m, XSSFCell tc, Paginator.Segment b) {
+        String t = tc.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING ? tc.getStringCellValue() : "0";
+        XSSFCellStyle st = tc.getCellStyle();
+        double size = st == null ? 11 : st.getFont().getFontHeightInPoints();
+        double w = Math.max(1, L.x(m.getLastColumn() + 1) - L.x(m.getFirstColumn()) - 3);
+        boolean wrap = st != null && st.getWrapText();
+        int lines = 0;
+        double maxW = 0;
+        for (String para : t.split("\n", -1)) {
+            double em = 0;
+            for (int i = 0; i < para.length(); i++) em += para.charAt(i) < 0x100 || (para.charAt(i) >= 0xff61 && para.charAt(i) <= 0xff9f) ? 0.5 : 1;
+            lines += wrap ? Math.max(1, (int) Math.ceil(em * size / w)) : 1;
+            maxW = Math.max(maxW, Math.min(em * size, w));
+        }
+        // 横: 配置で文字の左右を決める (標準は文字列なら左、数値なら右とする)
+        double x0 = L.x(m.getFirstColumn()), x1 = L.x(m.getLastColumn() + 1), la, lb;
+        org.apache.poi.ss.usermodel.HorizontalAlignment ha = st == null ? org.apache.poi.ss.usermodel.HorizontalAlignment.GENERAL : st.getAlignment();
+        switch (ha) {
+            case CENTER, CENTER_SELECTION -> { la = (x0 + x1 - maxW) / 2; lb = la + maxW; }
+            case RIGHT -> { lb = x1 - 1.5; la = lb - maxW; }
+            case FILL, JUSTIFY, DISTRIBUTED -> { la = x0; lb = x1; }
+            case GENERAL -> {
+                if (tc.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING) { la = x0 + 1.5; lb = la + maxW; }
+                else { lb = x1 - 1.5; la = lb - maxW; }
+            }
+            default -> { la = x0 + 1.5; lb = la + maxW; }
+        }
+        if (lb <= L.x(b.c0) + 0.5 || la >= L.x(b.c1 + 1) - 0.5) return false;
+        double th = lines * size * 1.2;
+        double y0 = L.y(m.getFirstRow()), y1 = L.y(m.getLastRow() + 1);
+        org.apache.poi.ss.usermodel.VerticalAlignment va = st == null ? org.apache.poi.ss.usermodel.VerticalAlignment.BOTTOM : st.getVerticalAlignment();
+        double ta, tb;
+        switch (va) {
+            case TOP -> { ta = y0; tb = y0 + th; }
+            case CENTER -> { ta = (y0 + y1 - th) / 2; tb = ta + th; }
+            case JUSTIFY, DISTRIBUTED -> { ta = y0; tb = y1; }
+            default -> { tb = y1; ta = y1 - th; }
+        }
+        return tb > L.y(b.r0) + 0.5 && ta < L.y(b.r1 + 1) - 0.5;
+    }
+
+    /** 末尾のコメントの一覧の見出し (Excel の日本語版の印刷)。 */
+    static final String NOTE_CELL = "セル:", NOTE_TEXT = "コメント:";
+
+    /**
+     * 末尾に印刷するコメントの一覧を、ページごとの行 ({見出し, 文字}) に分ける。コメントは行、列の順。
+     * 1 件は「セル: 番地」「コメント: 文字 (改行ごとに 1 行)」と空行。
+     */
+    private static List<List<String[]>> commentPages(RenderContext ctx, SheetJob j) {
+        List<List<String[]>> pages = new ArrayList<>();
+        java.util.Map<org.apache.poi.ss.util.CellAddress, org.apache.poi.xssf.usermodel.XSSFComment> cm;
+        try {
+            cm = j.sheet.getCellComments();
+        } catch (RuntimeException e) {
+            xlsx2pdf.render.Warnings.add("コメントを読めませんでした", e);
+            return pages;
+        }
+        if (cm == null || cm.isEmpty()) return pages;
+        List<org.apache.poi.ss.util.CellAddress> keys = new ArrayList<>(cm.keySet());
+        keys.sort((a, b) -> a.getRow() != b.getRow() ? Integer.compare(a.getRow(), b.getRow()) : Integer.compare(a.getColumn(), b.getColumn()));
+        List<String[]> lines = new ArrayList<>();
+        for (org.apache.poi.ss.util.CellAddress k : keys) {
+            var c = cm.get(k);
+            String t = c.getString() == null ? "" : c.getString().getString();
+            if (!lines.isEmpty()) lines.add(new String[] {"", ""});
+            lines.add(new String[] {NOTE_CELL, k.formatAsString()});
+            String[] ls = t.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+            for (int i = 0; i < ls.length; i++) lines.add(new String[] {i == 0 ? NOTE_TEXT : "", ls[i]});
+        }
+        double pitch = notePitch(ctx, j) * noteScale(j);
+        int per = Math.max(1, (int) Math.floor((j.ps.paperH - j.ps.top - j.ps.bottom) / pitch));
+        for (int i = 0; i < lines.size(); i += per) pages.add(lines.subList(i, Math.min(lines.size(), i + per)));
+        return pages;
+    }
+
+    /** コメントの一覧の倍率: Excel はシートの印刷の倍率 (拡大縮小・1 ページに合わせる) で描く (rand30 rd15・rd23、exp124 cmt_*)。 */
+    private static double noteScale(SheetJob j) {
+        return j.pages.isEmpty() || !(j.pages.get(0).scale > 0) ? 1 : j.pages.get(0).scale;
+    }
+
+    /** コメントの一覧の行送り (標準フォントの行の高さ)。 */
+    private static double notePitch(RenderContext ctx, SheetJob j) {
+        double p = j.layout.linePitch(ctx.defaultFontName, ctx.defaultFontSize);
+        return p > 0 ? p : ctx.defaultFontSize * 1.68;
+    }
+
+    /** コメントの一覧の 1 ページを描く (ヘッダー・フッターも描く)。 */
+    private void renderCommentPage(RenderContext ctx, PDDocument doc, SheetJob j, List<String[]> lines, int pageInSheet, int pageNo,
+                                   int total, HeaderFooter hf) throws IOException {
+        PrintSetup ps = j.ps;
+        boolean snap = !ctx.printer.authorEnv;
+        double mediaW = snap ? Math.rint(ps.paperW * 600 / 72) * 0.12 : ps.paperW, mediaH = snap ? Math.rint(ps.paperH * 600 / 72) * 0.12 : ps.paperH;
+        PDPage page = new PDPage(new PDRectangle((float) mediaW, (float) mediaH));
+        doc.addPage(page);
+        try (PdfCanvas cv = new PdfCanvas(doc, page, ctx.fonts, ctx.images)) {
+            cv.save();
+            double k = noteScale(j);
+            hf.paint(cv, ps, ps.paperW, ps.paperH, k, pageInSheet, pageNo, total, j.sheet.getSheetName());
+            cv.restore();
+            xlsx2pdf.render.FontManager.Spec sp = ctx.fonts.spec(ctx.defaultFontName, false, false);
+            float size = (float) (ctx.defaultFontSize * k);
+            double pitch = notePitch(ctx, j) * k;
+            double labelW = sp.width(NOTE_TEXT, size, ctx.fonts);
+            double x0 = ps.left, xv = x0 + labelW + NOTE_GAP * k;
+            // 最初の基線: 上余白 + フォントの大きさ × 0.993 (Excel の印刷: 游ゴシック 11pt で 10.92pt)
+            double y = ps.top + size * 0.993;
+            for (String[] l : lines) {
+                if (!l[0].isEmpty()) cv.text(l[0], xv - NOTE_GAP * k - sp.width(l[0], size, ctx.fonts), y, sp, size, java.awt.Color.BLACK, 1, 0);
+                if (!l[1].isEmpty()) cv.text(l[1], xv, y, sp, size, java.awt.Color.BLACK, 1, 0);
+                y += pitch;
+            }
+        }
+    }
+
+    /** グラフシートのグラフは印刷範囲より幅 0.1in・高さ 9pt 小さい (左上をそろえる。Excel の印刷 exp124 cs_*・exp122 chartsheet) */
+    static final double CS_DW = 7.2, CS_DH = 9;
+
+    /** コメントの一覧の見出しと文字の間 (pt)。 */
+    static final double NOTE_GAP = 3.43;
 
     /**
      * 1 ページを描く (セル、図形、ヘッダー/フッター)。
@@ -645,11 +980,22 @@ public final class Converter {
                 double nx = Math.rint(mediaW / 0.12), ny = Math.rint(mediaH / 0.12);
                 cv.scale(nx / (nx - 1), ny / (ny - 1));
             }
+            // ヘッダー・フッターは本文より先に描く (Excel と同じく、塗ったセルが重なればヘッダーが隠れる)
+            cv.save();
+            hf.paint(cv, ps, ps.paperW, ps.paperH, pg.scale, pageInSheet, pageNo, total, j.sheet.getSheetName());
+            cv.restore();
             if (j.chart) {
                 cv.save();
-                j.drawings.paintChartSheet(cv, pg.offsetX, pg.offsetY, pg.contentW, pg.contentH);
+                j.drawings.paintChartSheet(cv, pg.offsetX, pg.offsetY, pg.contentW - CS_DW, pg.contentH - CS_DH);
                 cv.restore();
             } else {
+                // 右から左のシート: 本体を用紙の中心で左右反転して描く (A 列が右端。文字と図形の中身は反転を打ち消す)
+                j.drawings.bw = ps.blackAndWhite;
+                if (ps.rtl) {
+                    cv.save();
+                    cv.transform(PdfCanvas.flipAbout(ps.paperW / 2));
+                    j.drawings.rtl = true;
+                }
                 for (Paginator.Segment s : pg.segments) {
                     cv.save();
                     cv.translate(pg.offsetX + s.dx * pg.scale, pg.offsetY + s.dy * pg.scale);
@@ -657,18 +1003,36 @@ public final class Converter {
                     double sx = j.layout.x(s.c0), sy = j.layout.y(s.r0);
                     cv.translate(-sx, -sy);
                     double w = j.layout.x(s.c1 + 1) - sx, h = j.layout.y(s.r1 + 1) - sy;
+                    if (pg.hdrW > 0 || pg.hdrH > 0) {
+                        // 行列番号 (ブロックの外側に描くので、切り抜きの前に描く)
+                        boolean top = true, left = true, right = true, bottom = true;
+                        for (Paginator.Segment o : pg.segments) {
+                            if (o.dy < s.dy) top = false;
+                            if (o.dx < s.dx) left = false;
+                            if (o.dy > s.dy) bottom = false;
+                            if (o.dx > s.dx) right = false;
+                        }
+                        cv.mirrorText = ps.rtl;
+                        cp.paintHeadings(cv, s, pg.hdrW, pg.hdrH, top, left, right, bottom);
+                        cv.mirrorText = false;
+                    }
                     // Excel のクリップはブロックの外側に約 2pt (用紙上) 広がり、端の罫線が半分に切れない
                     double e = 2.0 / pg.scale;
                     cv.clipRect(sx - e, sy - e, w + 2 * e, h + 2 * e);
                     cp.setBlockPlacement(pg.offsetX + s.dx * pg.scale, pg.offsetY + s.dy * pg.scale, sx, sy);
+                    cv.mirrorText = ps.rtl;
                     cp.paint(cv, s);
-                    if (s.body) j.drawings.paint(cv, sx, sy, sx + w, sy + h);
+                    cv.mirrorText = false;
+                    if (s.body && !ps.draft) {
+                        // 図形・グラフの切り抜きは外側に約 0.44pt (用紙上。Excel の印刷 exp79・exp49: ページの右端で切れる位置)
+                        double ed = DRAWING_CLIP / pg.scale;
+                        cv.clipRect(sx - ed, sy - ed, w + 2 * ed, h + 2 * ed);
+                        j.drawings.paint(cv, sx, sy, sx + w, sy + h); // 簡易印刷は図形・グラフを印刷しない
+                    }
                     cv.restore();
                 }
+                if (ps.rtl) cv.restore();
             }
-            cv.save();
-            hf.paint(cv, ps, ps.paperW, ps.paperH, pg.scale, pageInSheet, pageNo, total, j.sheet.getSheetName());
-            cv.restore();
         }
     }
 }

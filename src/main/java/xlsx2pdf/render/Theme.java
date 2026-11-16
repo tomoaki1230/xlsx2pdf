@@ -22,6 +22,8 @@ public final class Theme {
     public String majorEa = "", minorEa = "";
     /** 見出し・本文の日本語 (Jpan) フォント (なければ null)。 */
     public String majorJpan, minorJpan;
+    /** テーマの部品がない (Apache POI などで作ったブック)。 */
+    public boolean missing;
     /** 線のスタイル (lnStyleLst の要素)。 */
     public final List<Element> lineStyles = new ArrayList<>();
     /** 塗りつぶしのスタイル (fillStyleLst の要素)。 */
@@ -36,7 +38,12 @@ public final class Theme {
         put("accent1", 0x4472C4); put("accent2", 0xED7D31); put("accent3", 0xA5A5A5); put("accent4", 0xFFC000);
         put("accent5", 0x5B9BD5); put("accent6", 0x70AD47); put("hlink", 0x0563C1); put("folHlink", 0x954F72);
         ThemesTable tt = wb.getTheme();
-        if (tt == null) return;
+        if (tt == null) {
+            // テーマのないブック (Apache POI などで作ったもの) は、日本語版の Excel の既定のテーマの日本語の書体になる。
+            // テーマのフォント (scheme) のセルは、名前 (Calibri・ＭＳ ゴシックなど) によらず游ゴシックで描かれる (exp108)
+            missing = true;
+            return;
+        }
         try (InputStream in = tt.getPackagePart().getInputStream()) {
             Element root = Xml.parse(in);
             Element te = Xml.child(root, "themeElements");
@@ -130,12 +137,53 @@ public final class Theme {
 
     /** Excel の濃淡 (tint): HLS の輝度を調整する (負なら暗く、正なら明るく)。 */
     public static Color applyTint(Color c, double tint) {
-        // Excel の濃淡は 4 桁の値として効く
+        // Excel の濃淡は 4 桁の値として効く。HLS は Windows の整数の変換 (HLSMAX = 240) で、輝度は切り捨て
+        // (Excel の印刷 exp77: accent1 +0.6 → 83CCEB、accent2 −0.25 → BE5014 と一致。小数の HLS では 1〜3 ずれる)
         tint = Math.round(tint * 10000) / 10000.0;
-        double[] hls = rgbToHls(c);
-        if (tint < 0) hls[1] = hls[1] * (1 + tint);
-        else hls[1] = hls[1] * (1 - tint) + tint;
-        return hlsToRgb(hls, c.getAlpha());
+        int[] hls = winRgbToHls(c.getRed(), c.getGreen(), c.getBlue());
+        double l = tint < 0 ? hls[1] * (1 + tint) : hls[1] * (1 - tint) + HLSMAX * tint;
+        int[] rgb = winHlsToRgb(hls[0], (int) Math.floor(l), hls[2]);
+        return new Color(rgb[0], rgb[1], rgb[2], c.getAlpha());
+    }
+
+    /** Windows の HLS の最大値 (色相・輝度・彩度は 0〜240 の整数)。 */
+    private static final int HLSMAX = 240, RGBMAX = 255;
+
+    /** Windows の RGB → HLS (整数の計算。KB29240 の方式)。 */
+    static int[] winRgbToHls(int r, int g, int b) {
+        int mx = Math.max(r, Math.max(g, b)), mn = Math.min(r, Math.min(g, b));
+        int l = ((mx + mn) * HLSMAX + RGBMAX) / (2 * RGBMAX);
+        if (mx == mn) return new int[] {HLSMAX * 2 / 3, l, 0};
+        int s = l <= HLSMAX / 2 ? ((mx - mn) * HLSMAX + (mx + mn) / 2) / (mx + mn)
+                : ((mx - mn) * HLSMAX + (2 * RGBMAX - mx - mn) / 2) / (2 * RGBMAX - mx - mn);
+        int rd = ((mx - r) * (HLSMAX / 6) + (mx - mn) / 2) / (mx - mn);
+        int gd = ((mx - g) * (HLSMAX / 6) + (mx - mn) / 2) / (mx - mn);
+        int bd = ((mx - b) * (HLSMAX / 6) + (mx - mn) / 2) / (mx - mn);
+        int h = r == mx ? bd - gd : g == mx ? HLSMAX / 3 + rd - bd : 2 * HLSMAX / 3 + gd - rd;
+        if (h < 0) h += HLSMAX;
+        if (h > HLSMAX) h -= HLSMAX;
+        return new int[] {h, l, s};
+    }
+
+    private static int hueToRgb(int n1, int n2, int h) {
+        if (h < 0) h += HLSMAX;
+        if (h > HLSMAX) h -= HLSMAX;
+        if (h < HLSMAX / 6) return n1 + ((n2 - n1) * h + HLSMAX / 12) / (HLSMAX / 6);
+        if (h < HLSMAX / 2) return n2;
+        if (h < HLSMAX * 2 / 3) return n1 + ((n2 - n1) * (HLSMAX * 2 / 3 - h) + HLSMAX / 12) / (HLSMAX / 6);
+        return n1;
+    }
+
+    /** Windows の HLS → RGB (整数の計算)。 */
+    static int[] winHlsToRgb(int h, int l, int s) {
+        l = Math.max(0, Math.min(HLSMAX, l));
+        if (s == 0) { int v = l * RGBMAX / HLSMAX; return new int[] {v, v, v}; }
+        int m2 = l <= HLSMAX / 2 ? (l * (HLSMAX + s) + HLSMAX / 2) / HLSMAX : l + s - (l * s + HLSMAX / 2) / HLSMAX;
+        int m1 = 2 * l - m2;
+        int r = (hueToRgb(m1, m2, h + HLSMAX / 3) * RGBMAX + HLSMAX / 2) / HLSMAX;
+        int g = (hueToRgb(m1, m2, h) * RGBMAX + HLSMAX / 2) / HLSMAX;
+        int b = (hueToRgb(m1, m2, h - HLSMAX / 3) * RGBMAX + HLSMAX / 2) / HLSMAX;
+        return new int[] {Math.max(0, Math.min(255, r)), Math.max(0, Math.min(255, g)), Math.max(0, Math.min(255, b))};
     }
 
     /** RGB を HLS {色相, 輝度, 彩度} (各 0〜1) にする。 */
@@ -237,17 +285,48 @@ public final class Theme {
                 case "lumMod" -> { double[] h = rgbToHls(c); h[1] *= v; c = hlsToRgb(h, 255); }
                 case "lumOff" -> { double[] h = rgbToHls(c); h[1] += v; c = hlsToRgb(h, 255); }
                 case "satMod" -> { double[] h = rgbToHls(c); h[2] *= v; c = hlsToRgb(h, 255); }
-                case "tint" -> c = new Color(clamp(1 - (1 - c.getRed() / 255.0) * v), clamp(1 - (1 - c.getGreen() / 255.0) * v),
-                        clamp(1 - (1 - c.getBlue() / 255.0) * v));
-                case "shade" -> c = new Color(clamp(c.getRed() / 255.0 * v), clamp(c.getGreen() / 255.0 * v),
-                        clamp(c.getBlue() / 255.0 * v));
+                // tint・shade は線形の RGB で (Office と同じ。exp47 smartart2 の accent1 tint 40% が Excel の印刷の色に合う)
+                case "tint" -> c = new Color(fromLinear(1 - (1 - toLinear(c.getRed())) * v), fromLinear(1 - (1 - toLinear(c.getGreen())) * v),
+                        fromLinear(1 - (1 - toLinear(c.getBlue())) * v));
+                case "shade" -> c = new Color(fromLinear(toLinear(c.getRed()) * v), fromLinear(toLinear(c.getGreen()) * v),
+                        fromLinear(toLinear(c.getBlue()) * v));
                 case "inv" -> c = new Color(255 - c.getRed(), 255 - c.getGreen(), 255 - c.getBlue());
                 case "gray" -> { int g = (c.getRed() * 3 + c.getGreen() * 6 + c.getBlue()) / 10; c = new Color(g, g, g); }
                 case "comp" -> { double[] h = rgbToHls(c); h[0] = (h[0] + 0.5) % 1; c = hlsToRgb(h, 255); }
+                case "alphaOff" -> alpha = Math.max(0, Math.min(255, (int) Math.round(alpha + v * 255)));
+                // 色相 (角度は 60000 分の 1 度)・彩度・輝度の設定と加算・倍率
+                case "hue" -> { double[] h = rgbToHls(c); h[0] = (Xml.longAttr(m, "val", 0) / 21600000.0) % 1; c = hlsToRgb(h, 255); }
+                case "hueOff" -> { double[] h = rgbToHls(c); h[0] = ((h[0] + Xml.longAttr(m, "val", 0) / 21600000.0) % 1 + 1) % 1; c = hlsToRgb(h, 255); }
+                case "hueMod" -> { double[] h = rgbToHls(c); h[0] = (h[0] * v % 1 + 1) % 1; c = hlsToRgb(h, 255); }
+                case "sat" -> { double[] h = rgbToHls(c); h[2] = v; c = hlsToRgb(h, 255); }
+                case "satOff" -> { double[] h = rgbToHls(c); h[2] += v; c = hlsToRgb(h, 255); }
+                case "lum" -> { double[] h = rgbToHls(c); h[1] = v; c = hlsToRgb(h, 255); }
+                // 赤・緑・青の成分 (線形の RGB で計算する)
+                case "red", "redMod", "redOff", "green", "greenMod", "greenOff", "blue", "blueMod", "blueOff" -> {
+                    double[] rgb = {toLinear(c.getRed()), toLinear(c.getGreen()), toLinear(c.getBlue())};
+                    String n = m.getLocalName();
+                    int k = n.startsWith("red") ? 0 : n.startsWith("green") ? 1 : 2;
+                    if (n.endsWith("Mod")) rgb[k] *= v; else if (n.endsWith("Off")) rgb[k] += v; else rgb[k] = v;
+                    c = new Color(fromLinear(rgb[0]), fromLinear(rgb[1]), fromLinear(rgb[2]));
+                }
+                case "gamma" -> c = new Color(fromLinear(c.getRed() / 255.0), fromLinear(c.getGreen() / 255.0), fromLinear(c.getBlue() / 255.0));
+                case "invGamma" -> c = new Color(clamp(toLinear(c.getRed())), clamp(toLinear(c.getGreen())), clamp(toLinear(c.getBlue())));
                 default -> { }
             }
         }
         return new Color(c.getRed(), c.getGreen(), c.getBlue(), alpha);
+    }
+
+    /** sRGB の成分 (0〜255) を線形の値 (0〜1) にする。 */
+    private static double toLinear(int v) {
+        double s = v / 255.0;
+        return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    }
+
+    /** 線形の値 (0〜1) を sRGB の成分 (0〜255) にする。 */
+    private static int fromLinear(double v) {
+        v = Math.max(0, Math.min(1, v));
+        return clamp(v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
     }
 
     /** 16 進の RGB (RRGGBB) を色にする (不正なら黒)。 */
@@ -261,28 +340,10 @@ public final class Theme {
 
     /** プリセット色名 (prstClr) を色にする (不明なら黒)。 */
     private static Color preset(String v) {
-        return switch (v) {
-            case "black" -> Color.BLACK;
-            case "white" -> Color.WHITE;
-            case "red" -> Color.RED;
-            case "green" -> new Color(0x008000);
-            case "blue" -> Color.BLUE;
-            case "yellow" -> Color.YELLOW;
-            case "gray", "grey" -> new Color(0x808080);
-            case "lightGray", "ltGray" -> new Color(0xD3D3D3);
-            case "darkGray", "dkGray" -> new Color(0xA9A9A9);
-            case "orange" -> new Color(0xFFA500);
-            case "cyan", "aqua" -> Color.CYAN;
-            case "magenta", "fuchsia" -> Color.MAGENTA;
-            case "navy" -> new Color(0x000080);
-            case "purple" -> new Color(0x800080);
-            case "silver" -> new Color(0xC0C0C0);
-            case "maroon" -> new Color(0x800000);
-            case "olive" -> new Color(0x808000);
-            case "teal" -> new Color(0x008080);
-            case "lime" -> new Color(0x00FF00);
-            default -> Color.BLACK;
-        };
+        // DrawingML の ST_PresetColorVal (約 140 色。POI の PresetColor の表)
+        org.apache.poi.sl.usermodel.PresetColor p = org.apache.poi.sl.usermodel.PresetColor.valueOfOoxmlId(v);
+        if (p == null && v.contains("rey")) p = org.apache.poi.sl.usermodel.PresetColor.valueOfOoxmlId(v.replace("rey", "ray")); // grey → gray
+        return p != null && p.color != null ? p.color : Color.BLACK;
     }
 
     /** 塗りつぶし・線の要素の、最初の色の子要素を解決する (なければ null)。 */

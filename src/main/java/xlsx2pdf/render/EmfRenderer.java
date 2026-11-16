@@ -72,7 +72,9 @@ final class EmfRenderer {
 
     private record Pen(int style, double width, Color color) {}
 
-    private record Brush(int style, Color color) {}
+    private record Brush(int style, Color color, java.awt.Paint paint) {
+        Brush(int style, Color color) { this(style, color, null); }
+    }
 
     private record LogFont(int height, int escapement, int weight, boolean italic, boolean underline, boolean strike, String face) {}
 
@@ -118,6 +120,7 @@ final class EmfRenderer {
                 record(type, pos, size);
             } catch (RuntimeException e) {
                 // 壊れた記録は飛ばす
+                Warnings.add("EMF 画像の一部を描けませんでした", e);
             }
             if (type == 14) break;
             pos += size;
@@ -206,6 +209,8 @@ final class EmfRenderer {
             case 38 -> objects.put(i32(p + 8), new Pen(i32(p + 12), i32(p + 16), color(i32(p + 24)))); // CREATEPEN
             case 95 -> objects.put(i32(p + 8), new Pen(i32(p + 28), i32(p + 32), color(i32(p + 40)))); // EXTCREATEPEN
             case 39 -> objects.put(i32(p + 8), new Brush(i32(p + 12), color(i32(p + 16))));             // CREATEBRUSHINDIRECT
+            case 93, 94 -> patternBrush(p);                                   // CREATEMONOBRUSH, CREATEDIBPATTERNBRUSHPT
+            case 118 -> gradientFill(p);                                      // GRADIENTFILL
             case 82 -> objects.put(i32(p + 8), logFont(p + 12));              // EXTCREATEFONTINDIRECTW
             case 27 -> { st.cpx = i32(p + 8); st.cpy = i32(p + 12); if (path != null) { Point2D q = pt(st.cpx, st.cpy); path.moveTo(q.getX(), q.getY()); } } // MOVETOEX
             case 54 -> lineTo(i32(p + 8), i32(p + 12));                       // LINETO
@@ -382,10 +387,100 @@ final class EmfRenderer {
 
     private void fill(Shape o) {
         if (st.brush.style == 1) return;  // BS_NULL
-        g.setColor(st.brush.color);
+        if (st.brush.paint != null) g.setPaint(st.brush.paint); else g.setColor(st.brush.color);
         g.fill(o);
         drawn++;
     }
+
+    /**
+     * 模様のブラシ (CREATEDIBPATTERNBRUSHPT・CREATEMONOBRUSH): DIB を出力の左上から 1 デバイス画素 = devPx で敷き詰める。
+     * 色は画像の平均 (模様を描けないところ用)。
+     */
+    private void patternBrush(int p) {
+        int ih = i32(p + 8), offBmi = i32(p + 16), cbBmi = i32(p + 20), offBits = i32(p + 24), cbBits = i32(p + 28);
+        if (cbBmi <= 0 || offBmi <= 0 || offBits <= 0) return;
+        BufferedImage img = dib(p + offBmi, cbBmi, p + offBits, cbBits, 0x00CC0020);
+        if (img == null) return;
+        long r = 0, gg = 0, bb = 0;
+        int n = img.getWidth() * img.getHeight();
+        for (int y = 0; y < img.getHeight(); y++) for (int x = 0; x < img.getWidth(); x++) {
+            int v = img.getRGB(x, y);
+            r += v >> 16 & 255; gg += v >> 8 & 255; bb += v & 255;
+        }
+        Color avg = new Color((int) (r / n), (int) (gg / n), (int) (bb / n));
+        java.awt.TexturePaint tp = new java.awt.TexturePaint(img, new Rectangle2D.Double(0, 0, img.getWidth() * devPx, img.getHeight() * devPx));
+        objects.put(ih, new Brush(3, avg, tp));
+    }
+
+    /**
+     * GRADIENTFILL: 頂点 (TRIVERTEX: x, y と 16 ビットの赤・緑・青) と、矩形 (横 0・縦 1) か三角形 (2) の組。
+     * 矩形は 2 色の線形のグラデーション、三角形は細かい三角形に分けて頂点の色を補間する。
+     */
+    private void gradientFill(int p) {
+        int nVer = i32(p + 24), nTri = i32(p + 28), mode = i32(p + 32);
+        int recSize = i32(p + 4);
+        int v0 = p + 36;
+        int m0 = v0 + nVer * 16;
+        int per = mode == 2 ? 12 : 8;
+        if (nVer <= 0 || nTri <= 0 || (long) nVer * 16 + (long) nTri * per + 36 > recSize) return;
+        Point2D[] pts = new Point2D[nVer];
+        Color[] cols = new Color[nVer];
+        for (int k = 0; k < nVer; k++) {
+            int q = v0 + k * 16;
+            pts[k] = pt(i32(q), i32(q + 4));
+            cols[k] = new Color((i16(q + 8) & 0xFFFF) >> 8, (i16(q + 10) & 0xFFFF) >> 8, (i16(q + 12) & 0xFFFF) >> 8);
+        }
+        for (int t = 0; t < nTri; t++) {
+            int q = m0 + t * per;
+            if (mode == 2) {
+                int a = i32(q), b2 = i32(q + 4), c = i32(q + 8);
+                if (a < 0 || b2 < 0 || c < 0 || a >= nVer || b2 >= nVer || c >= nVer) continue;
+                gouraud(pts[a], pts[b2], pts[c], cols[a], cols[b2], cols[c]);
+            } else {
+                int a = i32(q), b2 = i32(q + 4);
+                if (a < 0 || b2 < 0 || a >= nVer || b2 >= nVer) continue;
+                Point2D ul = pts[a], lr = pts[b2];
+                Rectangle2D rc = new Rectangle2D.Double(Math.min(ul.getX(), lr.getX()), Math.min(ul.getY(), lr.getY()),
+                        Math.abs(lr.getX() - ul.getX()), Math.abs(lr.getY() - ul.getY()));
+                java.awt.GradientPaint gp = mode == 0
+                        ? new java.awt.GradientPaint((float) ul.getX(), 0, cols[a], (float) lr.getX(), 0, cols[b2])
+                        : new java.awt.GradientPaint(0, (float) ul.getY(), cols[a], 0, (float) lr.getY(), cols[b2]);
+                g.setPaint(gp);
+                g.fill(rc);
+            }
+            drawn++;
+        }
+    }
+
+    /** 三角形を 16 × 16 に分けて、頂点の色を補間して塗る。 */
+    private void gouraud(Point2D a, Point2D b2, Point2D c, Color ca, Color cb, Color cc) {
+        int n = 16;
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n - i; j++) {
+                for (int up = 0; up < (j < n - i - 1 ? 2 : 1); up++) {
+                    double[][] w = up == 0
+                            ? new double[][] {{i, j}, {i + 1, j}, {i, j + 1}}
+                            : new double[][] {{i + 1, j}, {i + 1, j + 1}, {i, j + 1}};
+                    Path2D tri = new Path2D.Double();
+                    double sr = 0, sg = 0, sb = 0;
+                    for (int k = 0; k < 3; k++) {
+                        double u = w[k][0] / n, v = w[k][1] / n, x = 1 - u - v;
+                        double px = x * a.getX() + u * b2.getX() + v * c.getX(), py = x * a.getY() + u * b2.getY() + v * c.getY();
+                        if (k == 0) tri.moveTo(px, py); else tri.lineTo(px, py);
+                        sr += x * ca.getRed() + u * cb.getRed() + v * cc.getRed();
+                        sg += x * ca.getGreen() + u * cb.getGreen() + v * cc.getGreen();
+                        sb += x * ca.getBlue() + u * cb.getBlue() + v * cc.getBlue();
+                    }
+                    tri.closePath();
+                    g.setColor(new Color(clamp(sr / 3), clamp(sg / 3), clamp(sb / 3)));
+                    g.fill(tri);
+                    g.draw(tri);   // 隣との隙間を埋める
+                }
+            }
+        }
+    }
+
+    private static int clamp(double v) { return (int) Math.max(0, Math.min(255, Math.round(v))); }
 
     private void stroke(Shape o) {
         int style = st.pen.style & 0xF;
@@ -473,7 +568,7 @@ final class EmfRenderer {
             g.setColor(st.bkColor);
             g.fill(r);
         }
-        if ((opts & 0x10) != 0) return;  // ETO_GLYPH_INDEX は字形番号: 文字に戻せないので描かない
+        boolean glyphs = (opts & 0x10) != 0 && wide;   // ETO_GLYPH_INDEX: 16 ビットの字形番号 (選んだフォントの番号)
         LogFont lf = st.font;
         String face = lf.face.startsWith("@") ? lf.face.substring(1) : lf.face;
         Font base = fonts.awtFont(face, lf.weight >= 600, lf.italic);
@@ -495,6 +590,7 @@ final class EmfRenderer {
         Font fOut = base.deriveFont((float) sizeOut);
         for (int k = 0; k < s.length(); k++) {
             if (haveDx && k < n) dx[k] = i32(p + offDx + 4 * dxStep * Math.min(k, n - 1));
+            else if (glyphs) dx[k] = (int) Math.round(fOut.createGlyphVector(frc, new int[] {s.charAt(k)}).getGlyphMetrics(0).getAdvance() / Math.max(1e-6, sx));
             else dx[k] = (int) Math.round(fOut.getStringBounds(s.substring(k, k + 1), frc).getWidth() / Math.max(1e-6, sx));
             total += dx[k];
         }
@@ -517,7 +613,8 @@ final class EmfRenderer {
             g.translate(ox, oy);
             g.rotate(-esc + (vertical ? Math.PI / 2 : 0));
             g.setFont(fOut);
-            g.drawString(ch, 0f, 0f);
+            if (glyphs) g.drawGlyphVector(fOut.createGlyphVector(frc, new int[] {s.charAt(k)}), 0f, 0f);
+            else g.drawString(ch, 0f, 0f);
             g.setTransform(save);
             adv += dx[k];
         }
@@ -552,7 +649,11 @@ final class EmfRenderer {
                 case 0x00000042 -> Color.BLACK;
                 default -> null;
             };
-            if (c != null) { g.setColor(c); g.fill(dest); drawn++; }
+            if (c != null) {
+                if (rop == 0x00F00021 && st.brush.paint != null) g.setPaint(st.brush.paint); else g.setColor(c);   // 模様のブラシは模様で
+                g.fill(dest);
+                drawn++;
+            }
             return;
         }
         BufferedImage img = dib(p + offBmi, cbBmi, p + offBits, cbBits, rop);
@@ -621,8 +722,10 @@ final class EmfRenderer {
         }
         boolean topDown = h < 0;
         h = Math.abs(h);
+        if ((comp == 1 && bpp == 8) || (comp == 2 && bpp == 4)) return rle(bmi, hs, bpp, w, h, bits, cbBits, i32(bmi + 32));
         int clrUsed = i32(bmi + 32);
-        int nPal = bpp <= 8 ? (clrUsed > 0 ? clrUsed : 1 << bpp) : 0;
+        // パレットは 1 << bpp 色まで (それを超える色数や負の値は壊れた記録)
+        int nPal = bpp <= 8 ? (clrUsed > 0 && clrUsed <= 1 << bpp ? clrUsed : 1 << bpp) : 0;
         int palOff = bmi + hs + (comp == 3 && hs == 40 ? 12 : 0);
         int[] pal = new int[Math.max(nPal, 1)];
         for (int k = 0; k < nPal && palOff + k * 4 + 3 < b.capacity(); k++) {
@@ -653,6 +756,44 @@ final class EmfRenderer {
                 else if (rop == 0x00EE0086 && rgb == 0) argb = 0;         // SRCPAINT: 黒は下を残す
                 else if (rop == 0x00330008) argb = 0xFF000000 | (~rgb & 0xFFFFFF); // NOTSRCCOPY
                 img.setRGB(x, y, argb);
+            }
+        }
+        return img;
+    }
+
+    /**
+     * RLE で圧縮した DIB (BI_RLE8・BI_RLE4)。下の行から上へ。符号化されない画素は透明 (下を残す)。
+     */
+    private BufferedImage rle(int bmi, int hs, int bpp, int w, int h, int bits, int cbBits, int clrUsed) {
+        int nPal = clrUsed > 0 && clrUsed <= 1 << bpp ? clrUsed : 1 << bpp;
+        int[] pal = new int[nPal];
+        for (int k = 0; k < nPal && bmi + hs + k * 4 + 3 < b.capacity(); k++) {
+            int v = i32(bmi + hs + k * 4);
+            pal[k] = 0xFF000000 | (v & 0xFFFFFF);
+        }
+        if (cbBits <= 0 || bits + (long) cbBits > b.capacity()) return null;
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        int x = 0, y = 0, q = bits, end = bits + cbBits;
+        while (q + 1 < end && y < h) {
+            int n = b.get(q) & 255, c = b.get(q + 1) & 255;
+            q += 2;
+            if (n > 0) {
+                for (int k = 0; k < n; k++, x++) {
+                    int idx = bpp == 8 ? c : (k % 2 == 0 ? c >> 4 : c & 15);
+                    if (x < w) img.setRGB(x, h - 1 - y, pal[Math.min(nPal - 1, idx)]);
+                }
+            } else if (c == 0) { x = 0; y++; }
+            else if (c == 1) break;
+            else if (c == 2) { if (q + 1 >= end) break; x += b.get(q) & 255; y += b.get(q + 1) & 255; q += 2; }
+            else {
+                // 絶対モード: c 画素をそのまま (2 バイト境界に揃える)
+                int bytes = bpp == 8 ? c : (c + 1) / 2;
+                if (q + bytes > end) break;
+                for (int k = 0; k < c; k++, x++) {
+                    int v = bpp == 8 ? b.get(q + k) & 255 : (k % 2 == 0 ? (b.get(q + k / 2) >> 4) & 15 : b.get(q + k / 2) & 15);
+                    if (x < w) img.setRGB(x, h - 1 - y, pal[Math.min(nPal - 1, v)]);
+                }
+                q += bytes + (bytes & 1);
             }
         }
         return img;

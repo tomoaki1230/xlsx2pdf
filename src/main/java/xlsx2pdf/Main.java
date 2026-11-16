@@ -8,9 +8,9 @@ import java.util.List;
  * コマンドラインの入口。
  *
  * <pre>
- * java -jar xlsx2pdf.jar input.xlsx output.pdf [--font-dir DIR]... [--sheet NAME]... [--active-only] [--excel-page-size]
+ * java -jar xlsx2pdf.jar input.xlsx output.pdf [--font-dir DIR]... [--sheet NAME]... [--active-only] [--excel-page-size] [--recalc]
  *      [--default-paper A4] [--screen-dpi 96] [--printer-dpi 600]
- *      [--max-pages N] [--max-image-pixels N] [--max-zip-entry-mb N] [--timeout SEC] [--no-limits] [--verbose]
+ *      [--max-pages N] [--max-image-pixels N] [--max-zip-entry-mb N] [--max-zip-entries N] [--timeout SEC] [--no-limits] [--verbose]
  * </pre>
  *
  * 終了コード: 0 成功、1 変換できない (形式・パスワード・想定外のエラー)、2 引数の誤り、3 上限超過・メモリ不足、4 時間切れ。
@@ -32,18 +32,24 @@ public final class Main {
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--font-dir" -> opt.fontDirs.add(new File(args[++i]));
+                case "--font-cache-dir" -> opt.fontCacheDir = new File(args[++i]);
+                case "--no-font-cache" -> opt.noFontCache = true;
                 case "--sheet" -> opt.sheets.add(args[++i]);
                 case "--active-only" -> opt.activeOnly = true;
                 case "--excel-page-size" -> opt.excelPageSize = true;
                 case "--default-paper" -> opt.defaultPaper = xlsx2pdf.render.PrintSetup.paperCode(args[++i]);
                 case "--password" -> opt.password = args[++i];
+                case "--no-edit" -> opt.noEdit = true;
+                case "--owner-password" -> { opt.ownerPassword = args[++i]; opt.noEdit = true; }
                 case "--use-file-dpi" -> xlsx2pdf.render.PrintSetup.useFileDpi = true;
                 case "--screen-dpi" -> opt.screenDpi = dpiArg(args[++i], "--screen-dpi");
                 case "--printer-dpi" -> opt.printerDpi = dpiArg(args[++i], "--printer-dpi");
                 case "--author-env" -> opt.authorEnv = true;
+                case "--recalc" -> opt.recalc = true;
                 case "--max-pages" -> opt.maxPages = longArg(args[++i], "--max-pages");
                 case "--max-image-pixels" -> opt.maxImagePixels = longArg(args[++i], "--max-image-pixels");
                 case "--max-zip-entry-mb" -> opt.maxZipEntryBytes = longArg(args[++i], "--max-zip-entry-mb") << 20;
+                case "--max-zip-entries" -> opt.maxZipEntries = longArg(args[++i], "--max-zip-entries");
                 case "--timeout" -> opt.timeoutSeconds = longArg(args[++i], "--timeout");
                 case "--no-limits" -> noLimits = true;
                 case "--verbose" -> verbose = true;
@@ -148,7 +154,9 @@ public final class Main {
         boolean existed = out.exists();
         int code = 0;
         try {
-            new Converter(opt).convert(in, out);
+            Converter conv = new Converter(opt);
+            conv.convert(in, out);
+            for (String w : conv.getWarnings()) System.err.println("警告: " + w);
         } catch (LimitExceededException e) {
             System.err.println("変換を中止しました: " + e.getMessage());
             code = e.isTimeout() ? 4 : 3;
@@ -190,11 +198,17 @@ public final class Main {
         System.err.println("""
                 usage: java -jar xlsx2pdf.jar <input.xlsx> <output.pdf> [options]
                   --font-dir DIR      additional folder with TrueType fonts (e.g. a copy of Windows fonts)
+                  --font-cache-dir DIR  folder for the font scan cache (default: ~/.cache/xlsx2pdf; created if missing)
+                  --no-font-cache     do not read or write the font scan cache (slower: reads every font file each time)
                   --sheet NAME        print only this sheet (repeatable)
                   --active-only       print only selected sheets (Excel's default "active sheets")
                   --excel-page-size   page size = paper size / print scale, exactly like Excel's PDF export
                   --default-paper P   paper used when the file has no paper size (A4, A3, B4, B5, Letter, Legal...)
+                  --recalc            recalculate formulas before printing (default: print the results saved in the file).
+                                      Formulas that cannot be calculated keep their saved results
                   --password PW       password of an encrypted workbook
+                  --no-edit           forbid editing the PDF (printing and copying text stay allowed)
+                  --owner-password PW password that lifts the editing restriction (implies --no-edit; default: random)
                   --use-file-dpi      lay out with the printer resolution stored in the file (default: 600 dpi)
                   --screen-dpi N      display DPI of the PC whose Excel output you want to match (96 = 100%, 120 = 125%,
                                       144 = 150%, 192 = 200%; "150%" is also accepted). Default: 96
@@ -206,6 +220,7 @@ public final class Main {
                   --max-pages N         pages laid out before blank pages are dropped (default 10000)
                   --max-image-pixels N  pixels of one embedded image (default 50000000)
                   --max-zip-entry-mb N  uncompressed size of one part of the xlsx (default 1024)
+                  --max-zip-entries N   number of parts in the xlsx (default 100000)
                   --timeout SEC         conversion time limit in seconds (default 0 = unlimited)
                   --no-limits           remove all limits (for large files when memory and time are plentiful;
                                         give java enough memory, e.g. java -Xmx16g -jar ...)

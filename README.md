@@ -19,12 +19,13 @@ Excel も LibreOffice も要りません。Java だけで動きます（Apache P
   | Excel 2024 で PDF に保存したもの | 733 件 | 0.996 | 732 件 |
   | Excel 2021 で PDF に保存したもの | 733 件 | 0.997 | 733 件 |
   | 役所などが Web で公開している PDF（`--author-env`） | 739 件 | 0.903 | 722 件 |
+  | 官公庁・自治体が公開している xlsx の代表を、Excel 2024 で PDF に保存したもの | 3,978 件 | 0.984 | 3,948 件 |
 
   役所などの PDF は、作った人の PC で出力されたものです。Excel の版や画面の表示倍率が分からないため、ファイルの情報から推測して合わせています。
 
-  **重ね合わせの例**（一致率 0.997。上の表の平均に近いブックです）: Excel の PDF と本ツールの PDF を重ねた画像です。黒は両方が一致した部分、赤は Excel だけ、青は本ツールだけにある部分です。
+  **重ね合わせの例**（一致率 0.998）: 表・グラフ・文章を含む報告書（架空のデータで作った市場調査の報告書）を、Excel の PDF と本ツールの PDF で重ねた画像です。黒は両方が一致した部分、赤は Excel だけ、青は本ツールだけにある部分です。データバー付きの表、縦棒と第 2 軸の折れ線の複合グラフ、折り返した文章、ヘッダー・フッターを含みます。
 
-  ![Excel と本ツールの出力を重ねた画像。経歴書の様式で、罫線はほとんどが黒く重なり、下の記入要領の文字にわずかに赤と青のずれが見える](docs/images/overlay-keirekisho.png)
+  ![Excel と本ツールの出力を重ねた画像。市場調査の報告書で、表・グラフ・文章のほとんどが黒く重なり、文字の縁にわずかに赤と青のずれが見える](docs/images/overlay-market-report.png)
 
   一致率が同じくらいでも、差の目立ち方はブックによって違います。文字の折り返し位置が変わるブックでは、差がより目立ちます。
 - **日本語の様式に強い**: 和暦・曜日などの日本語の表示形式、縦書き、均等割り付け、ＭＳ 系フォントの字送りなど。
@@ -32,7 +33,7 @@ Excel も LibreOffice も要りません。Java だけで動きます（Apache P
 
 ## バージョン
 
-1.0.0
+0.1.0
 
 ## 動作環境
 
@@ -41,7 +42,7 @@ Excel も LibreOffice も要りません。Java だけで動きます（Apache P
 
 ## ダウンロードとファイル
 
-次の 2 つの jar を、GitHub の [Releases](https://github.com/tomoaki1230/xlsx2pdf/releases) からダウンロードできます。自分で作る場合は「[ビルド](#ビルド)」を見てください。
+次の 2 つの jar を使います。作り方は「[ビルド](#ビルド)」を見てください。
 
 | ファイル | 内容 |
 |---|---|
@@ -120,8 +121,13 @@ java -Xmx16g -jar xlsx2pdf.jar 大きな台帳.xlsx 台帳.pdf --no-limits
 |---|---|
 | `--sheet NAME` | 指定したシートだけを出力します（複数指定可）。名前で指定したシートは非表示でも出力します。 |
 | `--active-only` | 選択中（アクティブ）のシートだけを出力します（Excel の「作業中のシートを印刷」と同じ）。 |
+| `--recalc` | 数式を再計算してから出力します。既定は、ファイルに保存されている計算結果（最後に保存したときの値）を使います。プログラムで値だけを書き換えたブックや、TODAY() などを今日の値で印刷したいときに使います。計算できない数式（対応していない関数など）は保存されている結果のまま出力し、その件数を警告に出します。 |
 | `--password PW` | 暗号化されたブックのパスワード。 |
+| `--no-edit` | PDF の編集を禁止します（内容の変更、注釈やフォームの記入、ページの組み替え）。印刷と文字のコピーはできます。開くときのパスワードは付きません。 |
+| `--owner-password PW` | 編集の禁止を解除するためのパスワード（権限パスワード）。指定すると `--no-edit` も有効になります。指定しなければ、知らせない乱数のパスワードになり、後から解除できません。 |
 | `--font-dir DIR` | フォントを探すフォルダを追加します（複数指定可）。ここにあるフォントが最も優先されます。 |
+| `--font-cache-dir DIR` | フォントのキャッシュを置くフォルダ（既定 `~/.cache/xlsx2pdf`。なければ作ります）。「[フォントのキャッシュ](#フォントのキャッシュ)」を参照。 |
+| `--no-font-cache` | フォントのキャッシュを使いません（読まず、書きません）。 |
 | `--default-paper P` | ブックに用紙サイズがないときの用紙（A4, A3, A5, B4, B5, Letter, Legal, Tabloid）。既定は A4（日本語版 Windows のプリンタの既定と同じ）。`--author-env` のときは、日本語のブックなら A4、それ以外は Letter。 |
 | `--excel-page-size` | 拡大縮小して印刷するシートのページを「用紙サイズ ÷ 倍率」の大きさにし、内容もその分だけ拡大して描きます。例: A4 で倍率 50% のシートは、A4 の縦横 2 倍のページになります。一部の Excel が作る PDF のページの大きさに合わせたいときに使います。既定は実際の用紙サイズ。 |
 | `--screen-dpi N` | 合わせたい Excel の PC の画面の DPI（96 dpi = 表示倍率 100%、120 dpi = 125%、144 dpi = 150%、192 dpi = 200%）。`150%` のように表示倍率でも書けます。既定は 96 dpi（100%）。`--author-env` のときの既定はファイルから推定します。 |
@@ -131,9 +137,12 @@ java -Xmx16g -jar xlsx2pdf.jar 大きな台帳.xlsx 台帳.pdf --no-limits
 | `--max-pages N` | 作るページ数の上限（既定 10,000。0 = 無制限）。 |
 | `--max-image-pixels N` | 1 枚の画像の画素数の上限（既定 5,000 万。超える画像は描きません。0 = 無制限）。 |
 | `--max-zip-entry-mb N` | xlsx（zip）の中の 1 項目の展開後の大きさの上限（既定 1024 MB。0 = 無制限）。 |
-| `--timeout SEC` | 変換の時間の上限（秒。既定 0 = 無制限）。 |
+| `--max-zip-entries N` | xlsx（zip）の中の項目の数の上限（既定 100,000。0 = 無制限）。 |
+| `--timeout SEC` | 変換の時間の上限（秒。既定 0 = 無制限）。セルの行や図形ごとに確かめますが、ブックの読み込みと PDF の保存の途中では止まりません。確実に止める必要があるときは、別のプロセスで動かし、呼び出し側で時間を測って終了させてください。 |
 | `--no-limits` | 上の上限をすべて外します。`java -Xmx16g` のように十分なメモリも与えてください。 |
 | `--verbose` | 想定外のエラーの詳細（スタックトレース）を表示します。 |
+
+編集の禁止は、PDF ビューアーが設定を守ることが前提です。Adobe Acrobat など主なビューアーは守りますが、制限を無視したり解除したりするソフトもあるため、改ざんを確実に防ぐものではありません。
 
 上限は、悪意のあるファイル（数 KB で数千万ページになるもの、展開すると巨大になる zip など）でメモリや時間を使い切られない
 ためのものです。超えると変換を中止し、緩めるオプションを表示します。
@@ -175,6 +184,18 @@ Century は Office に付属するフォントなので、Office の入ってい
 
 `xlsx2pdf-fonts.jar` も代わりのフォントもない場合は、PC に入っている似たフォントで代用し、その旨を表示します。
 それも見つからなければ、変換を始める前に止まります。
+
+### フォントのキャッシュ
+
+フォントフォルダの中のどのファイルがどの書体かを調べた結果を、既定で `~/.cache/xlsx2pdf/fonts-*.tsv`
+（Windows では `C:\Users\<ユーザー名>\.cache\xlsx2pdf`）に保存し、次の変換から使います。フォルダがなければ作ります。
+フォントファイルの大きさと更新日時が変わったものだけを読み直します。キャッシュは消しても構いません（次の変換で作り直します）。
+
+- 場所を変える: `--font-cache-dir DIR`（API では `opt.fontCacheDir`）
+- 使わない: `--no-font-cache`（API では `opt.noFontCache = true`）。読み書きしない代わりに、変換のたびにすべてのフォントファイルを読むので遅くなります
+  （WSL で Windows のフォントを読む場合は 1 回あたり 20〜30 秒）。
+
+キャッシュを書けない場合（ホームが読み取り専用など）は、キャッシュなしで変換を続けます。
 
 ## バッチファイルやプログラムから使う
 
@@ -310,6 +331,10 @@ opt.sheets.add("様式第1号");       // --sheet
 opt.timeoutSeconds = 60;            // --timeout
 // opt.screenDpi = 144;             // 画面の DPI。--screen-dpi 150% と同じ (96 dpi × 150% = 144 dpi)
 // opt.authorEnv = true;            // --author-env
+// opt.recalc = true;               // --recalc (数式を再計算してから出力)
+// opt.noEdit = true;               // --no-edit
+// opt.fontCacheDir = new File("/var/cache/xlsx2pdf"); // --font-cache-dir
+// opt.noFontCache = true;          // --no-font-cache
 // opt.noLimits();                  // --no-limits
 
 try {
@@ -319,7 +344,68 @@ try {
 }
 ```
 
+変換は、1 つのセルや図形を描けなくても止めずに最後まで続けます。描けなかったものは `getWarnings()` で一覧を受け取れます。コマンドラインでは、標準エラーに `警告: ...` と表示します。
+
+```java
+Converter conv = new Converter(opt);
+conv.convert(new File("申請書.xlsx"), new File("申請書.pdf"));
+for (String w : conv.getWarnings()) {
+    System.err.println(w);   // 例: シート「様式1」: 図形を描けませんでした (NullPointerException)
+}
+```
+
 `xlsx2pdf.jar` をクラスパスに加えて使います。`xlsx2pdf-fonts.jar` は同じフォルダに置けば自動で使われます（別のフォルダならクラスパスに加えます）。
+
+### 別のプロセスで呼ぶ（アプリが別の版の POI・PDFBox を使うとき）
+
+`xlsx2pdf.jar` は Apache POI 5.5.1 と Apache PDFBox 3.0.8 を同梱しています。アプリがこれらの別の版を使っているときは、同じプロセスに入れると、どちらの版が使われるかが決まらず、正しく動かないことがあります。そのようなときは、`java -jar xlsx2pdf.jar` を別のプロセスとして呼び出してください。
+
+別のプロセスにすると、次の利点もあります。
+
+- `--timeout` で止まらない処理 (ブックの読み込み、PDF の保存) も、呼び出し側でプロセスごと止められます。
+- 変換でメモリを使い切っても、アプリには影響しません。
+
+```java
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+public class ProcessExample {
+    /** xlsx を PDF にする。失敗したら例外。警告の行 (「警告: ...」) を返す。 */
+    public static List<String> toPdf(File jar, File xlsx, File pdf, long timeoutSeconds)
+            throws IOException, InterruptedException {
+        File log = File.createTempFile("xlsx2pdf", ".log");
+        try {
+            // 標準エラーの文字コードを UTF-8 に固定する (Java 17 は sun.*、18 以降は std*.encoding)
+            Process p = new ProcessBuilder("java", "-Dsun.stdout.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8",
+                    "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+                    "-jar", jar.getPath(), xlsx.getPath(), pdf.getPath())
+                    .redirectErrorStream(true)          // 標準エラー (警告・エラー) もまとめて
+                    .redirectOutput(log)                // ファイルに書く (出力が詰まって止まらないように)
+                    .start();
+            if (!p.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                p.destroyForcibly().waitFor();          // 時間切れは強制終了する
+                throw new IOException("時間切れです: " + xlsx);
+            }
+            List<String> lines = Files.readAllLines(log.toPath(), StandardCharsets.UTF_8);
+            if (p.exitValue() != 0) {
+                // 1 変換できない、2 引数の誤り、3 上限超過、4 時間切れ (--timeout)
+                throw new IOException("変換できませんでした (終了コード " + p.exitValue() + "): " + String.join(" ", lines));
+            }
+            return lines.stream().filter(l -> l.startsWith("警告: ")).toList();
+        } finally {
+            log.delete();
+        }
+    }
+}
+```
+
+- 警告は標準エラーに `警告: ...` の形で出るので、出力から受け取れます。終了コードは 0 のままです。
+- 出力は一時ファイルに書いています。標準出力を読まずに待つと、出力が多いときにプロセスが止まることがあるためです。
+- メッセージの文字コードは OS や Java の版で変わるので、`-Dstderr.encoding=UTF-8` などで UTF-8 に固定し、UTF-8 で読みます。
 
 ### ストリームで変換する
 
@@ -467,14 +553,17 @@ public class PdfServlet extends HttpServlet {
 
 - **セル**: 値と表示形式（和暦・曜日・日本語の組込み書式・会計の `*` 埋め・色指定・条件付きの区画）、フォント、塗りつぶし（単色・パターン・
   グラデーション）、罫線（全種類・斜線）、配置（折り返し・はみ出し・縮小して全体を表示・均等割り付け・選択範囲内で中央・縦書き・回転・字下げ）、
-  結合セル、リッチテキスト、条件付き書式（塗り・フォント・罫線・カラースケール・データバー）、ゼロ値の非表示、セル内のチェックボックス
+  結合セル、リッチテキスト、条件付き書式（塗り・フォント・罫線・カラースケール・データバー・アイコンセット）、ゼロ値の非表示、セル内のチェックボックス・画像、
+  ふりがな、テーブル・ピボットテーブルのスタイル、スパークライン
 - **印刷設定**: 用紙・向き・余白・拡大縮小・次のページ数に合わせて印刷・印刷範囲（複数範囲）・印刷タイトル行/列・改ページ・ページの順序・
-  水平/垂直の中央・枠線の印刷・先頭ページ番号・白黒印刷・コメントの印刷（画面表示イメージ）
+  水平/垂直の中央・枠線と行列番号の印刷・先頭ページ番号・白黒印刷・簡易印刷・コメントの印刷（画面表示イメージ・シートの末尾）・
+  右から左のシート・数式の表示で保存したシート・グラフシート
 - **ヘッダー/フッター**: 左/中央/右、ページ番号・総ページ数・日付・時刻・ファイル名・シート名・パス、フォント・大きさ・太字・斜体・下線・
-  取り消し線・上付き/下付き・色、画像、先頭ページ/奇数偶数ページ別
+  取り消し線・上付き/下付き・色、長い文字の折り返し、画像（大きさ・切り抜き・グレースケール・明るさ）、先頭ページ/奇数偶数ページ別
 - **オブジェクト**: 図形（プリセット形状すべて・ユーザー定義の形状）、線・矢印、グラデーション、影、画像（トリミング、EMF/WMF）、
   テキストボックス、グループ、コネクタ、SmartArt、フォームコントロール（チェックボックス・オプションボタンなど）、ActiveX コントロールの画像、
-  グラフ（棒・折れ線・面・円・ドーナツ・散布図・レーダー）
+  グラフ（棒・折れ線・面・円・ドーナツ・散布図・レーダー・バブル・株価・等高線・3D・補助円、ウォーターフォール・じょうご・ヒストグラム・
+  パレート図・箱ひげ図・ツリーマップ・サンバースト）、スライサー・タイムライン、数式（OMML）、SVG の画像
 
 ## 制限事項
 
@@ -483,7 +572,8 @@ public class PdfServlet extends HttpServlet {
   本ツールの既定は「今の Excel で、表示倍率 100% の PC で PDF に保存した結果」です。ほかの環境に合わせたい場合は `--screen-dpi`・`--printer-dpi`・
   `--author-env` を使ってください（「どの Excel の出力に合わせるか」）。
 - グラフは主な種類に対応していますが、細かな書式は Excel と異なる場合があります。
-- マクロ（VBA）は実行しません。数式は、ファイルに保存された計算結果を表示します。
+- マクロ（VBA）は実行しません。数式は、ファイルに保存された計算結果を表示します（`--recalc` で再計算できます。対応していない関数は保存された結果のままです）。
+- Strict OOXML 形式で保存された .xlsx は読めません。
 
 ## ビルド
 
@@ -508,6 +598,7 @@ mvn package
 | IPA フォント | IPA フォントライセンス v1.0 | `xlsx2pdf-fonts.jar` の `fonts/` |
 | Carlito、Caladea、Liberation | SIL Open Font License 1.1 | `xlsx2pdf-fonts.jar` の `fonts/` |
 | DejaVu Sans | Bitstream Vera ライセンスなど | `xlsx2pdf-fonts.jar` の `fonts/` |
+| ワードアートの変形の形の定義 (presetTextWarpDefinitions.xml) | ECMA-376 第 5 版 Part 1 (2016 年 12 月) の付属ファイル。Copyright © Ecma International | `xlsx2pdf.jar` の `xlsx2pdf/` |
 
 Apache License 2.0 の帰属表示 (NOTICE) は、`META-INF/third-party/NOTICE.txt` にまとめています。本ツールのライセンスは jar の直下の `LICENSE` にあります。
 

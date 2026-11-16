@@ -59,6 +59,8 @@ public final class ExcelFormat {
         boolean hasCond;
         /** [$-411] などのロケール (16 進)。 */
         String locale = "";
+        /** [DBNum1]〜[DBNum3] の数字の書き方 (0 はそのまま)。 */
+        int dbnum;
     }
 
     /** 表示形式をセクションに分ける。 */
@@ -98,8 +100,11 @@ public final class ExcelFormat {
                         sec.condOp = m.group(1);
                         sec.condVal = Double.parseDouble(m.group(2));
                     }
-                } else if (low.startsWith("dbnum") || low.startsWith("natnum")) {
-                    // 漢数字などの数字の書式には対応しない: 数字のまま
+                } else if (low.startsWith("dbnum")) {
+                    // 漢数字 (1: 一二三・十百千、2: 壱弐参・拾百阡、3: 全角数字)。数字の並びを書き換える (exp118)
+                    try { sec.dbnum = Integer.parseInt(low.substring(5).trim()); } catch (NumberFormatException ignored) { sec.dbnum = 0; }
+                } else if (low.startsWith("natnum")) {
+                    // ほかの数字の書式には対応しない: 数字のまま
                 } else {
                     Color col = ValueFormatter.sectionColor("[" + in + "]");
                     if (col != null) sec.color = col;
@@ -180,12 +185,64 @@ public final class ExcelFormat {
         } else {
             out.text = formatNumber(val, body, true);
         }
+        if (sec.dbnum >= 1 && sec.dbnum <= 3) out.text = dbnum(out.text, sec.dbnum);
         int f = out.text.indexOf(FILL);
         if (f >= 0 && f + 1 < out.text.length()) {
             out.fill = out.text.charAt(f + 1);
             out.text = out.text.substring(0, f + 1) + out.text.substring(f + 2);
         }
         return out;
+    }
+
+    private static final String KAN1 = "〇一二三四五六七八九", KAN2 = "〇壱弐参四伍六七八九";
+    private static final String[] UNIT1 = {"", "十", "百", "千"}, UNIT2 = {"", "拾", "百", "阡"};
+    private static final String[] BIG1 = {"", "万", "億", "兆"}, BIG2 = {"", "萬", "億", "兆"};
+
+    /**
+     * [DBNum] の数字の書き方に書き換える: 数字の並びごとに、1・2 は位取りの漢数字 (小数点の後は 1 字ずつ)、3 は全角の数字。
+     * Excel の印刷 (exp118): 0 の [DBNum3] で −13 → 「-１３」、[DBNum1] の和暦で「明治三十三年一月〇日」。
+     */
+    static String dbnum(String t, int kind) {
+        StringBuilder o = new StringBuilder();
+        int i = 0;
+        while (i < t.length()) {
+            char c = t.charAt(i);
+            if (c < '0' || c > '9') { o.append(c); i++; continue; }
+            int j = i;
+            while (j < t.length() && t.charAt(j) >= '0' && t.charAt(j) <= '9') j++;
+            String run = t.substring(i, j);
+            boolean frac = i > 0 && t.charAt(i - 1) == '.';
+            if (kind == 3) {
+                for (char d : run.toCharArray()) o.append((char) ('０' + (d - '0')));
+            } else if (frac || run.length() > 16) {
+                String k = kind == 1 ? KAN1 : KAN2;
+                for (char d : run.toCharArray()) o.append(k.charAt(d - '0'));
+            } else {
+                o.append(kanjiInt(Long.parseLong(run), kind));
+            }
+            i = j;
+        }
+        return o.toString();
+    }
+
+    /** 整数の位取りの漢数字 (1: 千二百三十四・十 は「一」を省く、2: 壱阡弐百参拾四)。 */
+    static String kanjiInt(long n, int kind) {
+        String k = kind == 1 ? KAN1 : KAN2;
+        if (n == 0) return String.valueOf(k.charAt(0));
+        String[] unit = kind == 1 ? UNIT1 : UNIT2, big = kind == 1 ? BIG1 : BIG2;
+        StringBuilder o = new StringBuilder();
+        for (int g = 3; g >= 0; g--) {
+            long grp = (n / (long) Math.pow(10000, g)) % 10000;
+            if (grp == 0) continue;
+            for (int p = 3; p >= 0; p--) {
+                int d = (int) (grp / (long) Math.pow(10, p) % 10);
+                if (d == 0) continue;
+                if (!(p > 0 && d == 1 && kind == 1)) o.append(k.charAt(d));
+                o.append(unit[p]);
+            }
+            o.append(big[g]);
+        }
+        return o.toString();
     }
 
     /** 表示形式の最初のセクションが「General」か (リテラル付きを含む)。 */
@@ -242,6 +299,8 @@ public final class ExcelFormat {
 
     /** "_x" の空白 (文字 x の幅)。括弧・マイナス・ピリオド・カンマは細い空白 (U+2009)、それ以外は半角空白。 */
     static String pad(char c) {
+        // 「_x」: x の文字の幅の空白。描かない私用の文字 (U+E000 + x) で表し、幅は書体の x の幅 (Excel の印刷 exp96 のメイリオ)
+        if (c != ' ' && c < 0x100) return String.valueOf((char) (FontManager.PAD_BASE + c));
         return switch (c) {
             case ')', '(', '-', '.', ',' -> "\u2009";
             default -> " ";
@@ -510,7 +569,9 @@ public final class ExcelFormat {
                 continue;
             }
             boolean numChar = "0#?.,".indexOf(c) >= 0 || (numberStarted && !numberEnded && (c == 'E' || c == 'e') && i + 1 < b.length()
-                    && (b.charAt(i + 1) == '+' || b.charAt(i + 1) == '-')) || (numberStarted && !numberEnded && c == '/');
+                    && (b.charAt(i + 1) == '+' || b.charAt(i + 1) == '-')) || (numberStarted && !numberEnded && c == '/')
+                    // 分母を固定する分数 (# ?/4) の分母の数字
+                    || (numberStarted && !numberEnded && c >= '1' && c <= '9' && pattern.indexOf("/") >= 0);
             if (c == '%') { percent = true; lit.append('%'); i++; if (numberStarted) numberEnded = true; continue; }
             if (numChar && !numberEnded) {
                 if (!numberStarted) {
@@ -578,6 +639,8 @@ public final class ExcelFormat {
 
     /** 絶対値を "#,##0.00"、"0.0E+00"、"# ?/?" のような数字のパターンで文字列にする。 */
     static String renderNumber(double a, String p) {
+        // Excel は値を有効数字 15 桁に丸めてから表示形式を当てる (1.4449999999999998 を 0.00 で 1.45)
+        if (Double.isFinite(a) && a != 0) a = new BigDecimal(a).round(new java.math.MathContext(15)).doubleValue();
         int e = p.indexOf('E');
         if (e >= 0) return scientific(a, p.substring(0, e), p.substring(e + 1));
         int slash = p.indexOf('/');
@@ -716,6 +779,16 @@ public final class ExcelFormat {
         return ms + "E" + (exp < 0 ? "-" : sign == '+' ? "+" : "") + es;
     }
 
+    /** 分数の ? の空白: 数字 1 文字の幅 (U+2007)。 */
+    private static final String FIG = "\u2007";
+
+    /** 文字列を幅 w まで空白で埋める (left なら左に埋めて右詰め)。 */
+    private static String pad(String v, int w, boolean left) {
+        if (v.length() >= w) return v;
+        String sp = FIG.repeat(w - v.length());
+        return left ? sp + v : v + sp;
+    }
+
     /** 分数 (分母の固定 "/4"、または桁数 "/??" に対する最良近似)。 */
     static String fraction(double a, String p) {
         String[] parts = p.split("/");
@@ -729,22 +802,39 @@ public final class ExcelFormat {
             bestD = Long.parseLong(den);
             bestN = Math.round(f * bestD);
         } else {
-            int maxD = (int) Math.pow(10, den.length()) - 1;
-            double bestErr = Double.MAX_VALUE;
-            for (int d = 1; d <= maxD; d++) {
-                long n = Math.round(f * d);
-                double err = Math.abs(f - (double) n / d);
-                if (err < bestErr - 1e-12) { bestErr = err; bestN = n; bestD = d; }
+            // Excel は連分数の近似分数 (convergent) のうち、分母が桁数に収まる最後のものを使う
+            // (12.1 を # ?/? で 12、# ??/?? で 12 1/10。最も近い 1/9 は選ばない)
+            long maxD = (long) Math.pow(10, den.length()) - 1;
+            long h0 = 0, h1 = 1, k0 = 1, k1 = 0;
+            double x = f;
+            bestN = 0; bestD = 1;
+            for (int it = 0; it < 64; it++) {
+                long q = (long) Math.floor(x);
+                long h2 = q * h1 + h0, k2 = q * k1 + k0;
+                if (k2 > maxD) break;
+                bestN = h2; bestD = k2;
+                h0 = h1; h1 = h2; k0 = k1; k1 = k2;
+                double r = x - q;
+                if (r < 1e-12 || Math.abs(f - (double) h2 / k2) < 1e-12) break;
+                x = 1 / r;
             }
         }
         if (bestN == bestD && hasInt) { whole++; bestN = 0; }
+        // 分子・分母の桁の指定 (? は桁がなければ空白)。分子は右に、分母は左に詰めて、指定の幅まで空白で埋める
+        String numPat = hasInt ? left.substring(left.lastIndexOf(' ') + 1) : left;
+        int numW = numPat.replaceAll("[^#0?]", "").length();
+        int denW = den.matches("\\d+") ? 0 : den.replaceAll("[^#0?]", "").length();
         StringBuilder sb = new StringBuilder();
-        if (hasInt && whole > 0) sb.append(whole).append(' ');
+        if (hasInt && (whole > 0 || left.substring(0, left.lastIndexOf(' ')).contains("0"))) sb.append(whole).append(' ');
         if (bestN == 0 && hasInt) {
-            if (whole == 0) sb.append('0');
-            return sb.toString().trim();
+            if (sb.length() == 0) sb.append('0');
+            // 分数の部分がなくなっても、その幅の空白を残す (Excel は桁を揃える)
+            String t = sb.toString().trim();
+            // 分母を決めた形 (# ?/4) も同じ (Excel の印刷 exp47: 3 は「3」の後に「 ?/4」の幅の空白)
+            boolean fixedDen = den.matches("\\d+");
+            return numW > 0 && (denW > 0 || fixedDen) ? t + " " + FIG.repeat(numW + 1 + (fixedDen ? den.length() : Math.max(denW, den.length()))) : t;
         }
-        sb.append(bestN).append('/').append(bestD);
+        sb.append(pad(String.valueOf(bestN), numW, true)).append('/').append(pad(String.valueOf(bestD), denW, false));
         return sb.toString();
     }
 }

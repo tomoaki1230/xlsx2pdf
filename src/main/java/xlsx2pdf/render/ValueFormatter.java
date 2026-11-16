@@ -158,7 +158,8 @@ public final class ValueFormatter {
             }
             case NUMERIC -> {
                 double v = cell.getNumericCellValue();
-                r.number = true;
+                // 表示形式「@」の数値は文字列と同じ扱い (標準の配置で左寄せ。exp124 fmt_at_num)
+                r.number = fmt == null || !fmt.trim().equals("@");
                 r.value = v;
                 if (v == 0 && !showZeros) { r.text = ""; return r; }
                 formatNumber(r, v, fmt);
@@ -216,7 +217,8 @@ public final class ValueFormatter {
 
     /** 数値を書式化して結果に設定する。 */
     private void formatNumber(Result r, double v, String fmt) {
-        if (fmt == null || fmt.isEmpty() || ExcelFormat.isGeneral(fmt) && sections(fmt).size() == 1
+        // 文字列の表示形式「@」の数値 (形式を後から付けたセル) は、Excel は標準の形で表示する (exp124 fmt_at_num)
+        if (fmt == null || fmt.isEmpty() || fmt.trim().equals("@") || ExcelFormat.isGeneral(fmt) && sections(fmt).size() == 1
                 && fmt.trim().equalsIgnoreCase("General")) {
             r.general = true;
             r.text = general(v, 11);
@@ -331,6 +333,51 @@ public final class ValueFormatter {
             if (s.length() <= maxChars) return s;
         }
         return String.format(Locale.ROOT, "%.0E", v);
+    }
+
+    /**
+     * 狭い列の「標準」: maxChars 文字 (どの文字も数字 1 文字分の幅で数える) に収まる形 (exp105)。
+     * 小数で書くと、1 未満の数の最初の有効数字の位置が変わるもの (0.000988 → 0.001) と、有効数字が指数表示より少ないものは指数表示にする。
+     * どちらも収まらなければ丸めた小数 (0、-0)。それも収まらなければ null (# で埋める)。
+     */
+    public static String generalFit(double v, int maxChars) {
+        if (maxChars < 1 || Double.isNaN(v) || Double.isInfinite(v)) return null;
+        if (v == 0) return "0";
+        double a = Math.abs(v);
+        String dec = null;
+        boolean decOk = false;
+        if (a < 1e11) {
+            int intDigits = a >= 1 ? (int) Math.floor(Math.log10(a)) + 1 : 1;
+            int avail = maxChars - intDigits - (v < 0 ? 1 : 0) - 1;
+            int d = Math.max(0, Math.min(Math.min(avail, 30), 10 - intDigits + (a < 1 ? leadingZeros(a) : 0)));
+            java.math.BigDecimal bd = new java.math.BigDecimal(v).setScale(d, java.math.RoundingMode.HALF_UP).round(new java.math.MathContext(15));
+            String t = bd.signum() == 0 ? (v < 0 ? "-0" : "0") : bd.stripTrailingZeros().toPlainString();
+            if (t.length() <= maxChars) {
+                dec = t;
+                double r = Math.abs(bd.doubleValue());
+                decOk = a >= 1 || r > 0 && Math.floor(Math.log10(r) + 1e-12) == Math.floor(Math.log10(a) + 1e-12);
+            }
+        }
+        String sci = null;
+        for (int digits = Math.max(0, maxChars - 5 - (v < 0 ? 1 : 0)); digits >= 0 && sci == null; digits--) {
+            String m = String.format(Locale.ROOT, "%." + digits + "E", v);
+            int e = m.indexOf('E');
+            String mant = m.substring(0, e);
+            if (mant.contains(".")) mant = mant.replaceAll("0+$", "").replaceAll("\\.$", "");
+            int exp = Integer.parseInt(m.substring(e + 1));
+            String t = mant + "E" + (exp < 0 ? "-" : "+") + String.format("%02d", Math.abs(exp));
+            if (t.length() <= maxChars) sci = t;
+        }
+        if (dec != null && decOk && (a >= 1 || sci == null || sig(dec) >= sig(sci))) return dec;
+        if (sci != null) return sci;
+        return dec;
+    }
+
+    /** 数字の文字列の有効数字の桁数 (指数の部分を除く)。 */
+    private static int sig(String t) {
+        int e = t.indexOf('E');
+        String d = (e >= 0 ? t.substring(0, e) : t).replaceAll("[^0-9]", "").replaceFirst("^0+", "");
+        return d.length();
     }
 
     /** 1 未満の数の、小数点の後に続く 0 の数 (0.001 → 2)。 */
