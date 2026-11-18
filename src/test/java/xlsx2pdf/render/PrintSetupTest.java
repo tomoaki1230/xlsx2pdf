@@ -14,16 +14,10 @@ class PrintSetupTest {
             s.getCTWorksheet().addNewPageSetup().setHorizontalDpi(300);
             s.getCTWorksheet().getPageSetup().setVerticalDpi(300);
             assertEquals(600, PrintSetup.read(wb, s, 0, 9, 0).hdpi);
-            boolean keep = PrintSetup.useFileDpi;
-            try {
-                PrintSetup.useFileDpi = true;
-                PrintSetup p = PrintSetup.read(wb, s, 0, 9, 0);
-                assertEquals(300, p.hdpi);
-                assertEquals(300, p.vdpi);
-                assertEquals(150, PrintSetup.read(wb, s, 0, 9, 150).hdpi);
-            } finally {
-                PrintSetup.useFileDpi = keep;
-            }
+            PrintSetup p = PrintSetup.read(wb, s, 0, 9, 0, true);
+            assertEquals(300, p.hdpi);
+            assertEquals(300, p.vdpi);
+            assertEquals(150, PrintSetup.read(wb, s, 0, 9, 150, true).hdpi);
         }
     }
 }

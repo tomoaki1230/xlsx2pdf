@@ -1,5 +1,7 @@
 package xlsx2pdf;
 
+import java.awt.geom.AffineTransform;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -98,6 +100,8 @@ public final class Converter {
         public int screenDpi;
         /** 出力環境: Excel で選択しているプリンタの解像度 (Microsoft Print to PDF は 600)。0 = 600 dpi。 */
         public int printerDpi;
+        /** ファイルの pageSetup の horizontalDpi/verticalDpi でレイアウトする (--use-file-dpi)。既定は 600 dpi。 */
+        public boolean useFileDpi;
         /**
          * 作成者の環境に合わせる (--author-env): 作成者の Excel の版・画面 DPI をファイルから推測し、作成者が出力した PDF に近づける。
          * false (既定) は、今の Excel を表示倍率 100% (または {@link #screenDpi}) の PC で印刷した結果に合わせる。
@@ -242,10 +246,6 @@ public final class Converter {
             render(in, tmp.toFile());
             try {
                 moveOver(tmp, target);
-                if (xlsx2pdf.render.ValueDump.ON) {   // 値の書き出しも出力の名前に合わせる
-                    Path v = Path.of(tmp + ".values.tsv");
-                    if (Files.exists(v)) Files.move(v, Path.of(target + ".values.tsv"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                }
             } catch (FileSystemException e) {
                 throw new IOException("出力先に書き込めません (ほかのアプリで開いていないか確認してください): " + target);
             }
@@ -337,7 +337,6 @@ public final class Converter {
     /** ブックを読み、PDF を out に書く。 */
     private void render(File in, File out) throws IOException, InvalidFormatException {
         prepare();
-        xlsx2pdf.render.ValueDump.begin();
         try (OPCPackage pkg = openPackage(in)) {
             render(pkg, in, in.getName(), doc -> {
                 // 読み直せない出力先 (デバイスなど) は、ここで編集を禁止する
@@ -346,8 +345,6 @@ public final class Converter {
             });
         }
         if (Files.isRegularFile(out.toPath())) finish(out);   // デバイスなどは読み直せない
-        if (xlsx2pdf.render.ValueDump.ON)
-            Files.write(new File(out.getPath() + ".values.tsv").toPath(), xlsx2pdf.render.ValueDump.take(), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** 完成した PDF の保存先。 */
@@ -360,8 +357,9 @@ public final class Converter {
         applyLimits();
         pagesMade = 0;
         warnings = List.of();
-        deadline = opt.timeoutSeconds > 0 ? System.nanoTime() + opt.timeoutSeconds * 1_000_000_000L : 0;
-        if (deadline == 0 && opt.timeoutSeconds > 0) deadline = 1;  // nanoTime がちょうど 0 のとき
+        // 約 100 年を超える上限は無制限と同じ (ナノ秒にすると long があふれて、すぐに時間切れになる)
+        deadline = opt.timeoutSeconds > 0 && opt.timeoutSeconds < 3_000_000_000L ? System.nanoTime() + opt.timeoutSeconds * 1_000_000_000L : 0;
+        if (deadline == 0 && opt.timeoutSeconds > 0 && opt.timeoutSeconds < 3_000_000_000L) deadline = 1;  // nanoTime がちょうど 0 のとき
     }
 
     /**
@@ -408,11 +406,9 @@ public final class Converter {
                     }
                 }
                 int pageNo = 0;
-                if (xlsx2pdf.render.ValueDump.ON) for (SheetJob j : jobs) dumpValues(j);
                 for (SheetJob j : jobs) {
                     if (j.ps.firstPageNumber != null) pageNo = j.ps.firstPageNumber - 1;
                     xlsx2pdf.render.Warnings.sheet(j.sheet.getSheetName());
-                    xlsx2pdf.render.ValueDump.sheet(j.sheet.getSheetName());
                     HeaderFooter hf = new HeaderFooter(ctx, j.sheet);
                     CellPainter cp = j.chart ? null : new CellPainter(ctx, j.layout, j.ps, new CondFormat(ctx, j.sheet));
                     for (int p = 0; p < j.pages.size(); p++) {
@@ -564,14 +560,14 @@ public final class Converter {
         if (magic != FileMagic.OLE2) {
             // Strict OOXML は名前空間を通常の形に書き換えてから開く
             boolean strict;
-            try (InputStream is = new java.io.BufferedInputStream(new java.io.FileInputStream(in))) {
-                strict = StrictOoxml.isStrict(is, opt.maxZipEntryBytes);
+            try {
+                strict = StrictOoxml.isStrict(in, opt.maxZipEntryBytes);
             } catch (IOException | RuntimeException e) {
                 strict = false;
             }
             if (strict) {
                 try (InputStream is = new java.io.BufferedInputStream(new java.io.FileInputStream(in))) {
-                    return OPCPackage.open(new java.io.ByteArrayInputStream(StrictOoxml.toTransitional(is, opt.maxZipEntryBytes, 1L << 30)));
+                    return OPCPackage.open(new java.io.ByteArrayInputStream(StrictOoxml.toTransitional(is, opt.maxZipEntryBytes, opt.maxZipEntryBytes > 0 ? 1L << 30 : 0)));
                 }
             }
             return OPCPackage.open(in, PackageAccess.READ);
@@ -621,29 +617,6 @@ public final class Converter {
         }
     }
 
-    /** 値の書き出し (開発用): ページ数・改ページ・画面の行高と列幅 (scripts/dump-excel.ps1 と同じ形)。 */
-    private static void dumpValues(SheetJob j) {
-        xlsx2pdf.render.ValueDump.sheet(j.sheet.getSheetName());
-        java.util.TreeSet<Integer> hb = new java.util.TreeSet<>(), vb = new java.util.TreeSet<>();
-        double scale = 1;
-        for (Paginator.Page p : j.pages) {
-            hb.add(p.bodyR0 + 1);
-            vb.add(p.bodyC0 + 1);
-            scale = p.scale;
-        }
-        if (!hb.isEmpty()) hb.remove(hb.first());
-        if (!vb.isEmpty()) vb.remove(vb.first());
-        String h = hb.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
-        String v = vb.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
-        xlsx2pdf.render.ValueDump.add("page", j.pages.size(), h, v, scale * 100);
-        if (j.layout == null) return;
-        StringBuilder rows = new StringBuilder(), cols = new StringBuilder();
-        for (int r = 0; r < 300; r++) rows.append(r == 0 ? "" : ",").append(xlsx2pdf.render.ValueDump.fmt(j.layout.screenRowPt(r)));
-        for (int c = 0; c < 60; c++) cols.append(c == 0 ? "" : ",").append(xlsx2pdf.render.ValueDump.fmt(j.layout.screenColPt(c)));
-        xlsx2pdf.render.ValueDump.add("rows", rows);
-        xlsx2pdf.render.ValueDump.add("cols", cols);
-    }
-
     /**
      * シートの印刷を準備する (ページ設定、印刷範囲、レイアウト、ページ分割、空ページの除去)。
      *
@@ -653,7 +626,7 @@ public final class Converter {
         // 用紙の指定がないブックは、Excel が PC のプリンタの既定の用紙を使う。既定は日本語版 Windows の PC (A4)、
         // --author-env ではブックの言語から推測する (日本語なら A4、それ以外は Letter)
         int paper = opt.defaultPaper > 0 ? opt.defaultPaper : ctx.japanese || !ctx.printer.authorEnv ? 9 : 1;
-        PrintSetup ps = PrintSetup.read(ctx.wb, sheet, index, paper, opt.printerDpi);
+        PrintSetup ps = PrintSetup.read(ctx.wb, sheet, index, paper, opt.printerDpi, opt.useFileDpi);
         if (!ctx.printer.authorEnv) ps.minMargin = 0;
         if (sheet instanceof XSSFChartSheet) {
             DrawingPainter dp = new DrawingPainter(ctx, sheet, null);
@@ -665,6 +638,11 @@ public final class Converter {
             pg.contentW = ps.paperW - ps.left - ps.right;
             pg.contentH = ps.paperH - ps.top - ps.bottom;
             pages.add(pg);
+            // グラフシートも 1 ページとしてページ数の上限に数える
+            if (opt.maxPages > 0 && pagesMade >= opt.maxPages) {
+                throw new LimitExceededException("ページ数が上限 (" + opt.maxPages + ") を超えます (シート「" + sheet.getSheetName() + "」)。--max-pages で上限を変更できます", false);
+            }
+            pagesMade++;
             return new SheetJob(sheet, index, ps, null, pages, dp, true);
         }
         // 使用範囲 {先頭行, 先頭列, 最終行, 最終列} を図形の範囲まで広げる
@@ -937,6 +915,30 @@ public final class Converter {
     /** グラフシートのグラフは印刷範囲より幅 0.1in・高さ 9pt 小さい (左上をそろえる) */
     static final double CS_DW = 7.2, CS_DH = 9;
 
+    /**
+     * 図形・グラフ・画像を、ページの画素の伸ばし (nx/(nx-1)・ny/(ny-1)) を掛けずに描くための変換。
+     * Excel の PDF では、セルの塗りと罫線は伸ばした位置に、図形は 0.12pt (600 dpi の 1 画素) の整数倍の位置にある。
+     * セルの座標から用紙への変換を M、伸ばしを S として、M⁻¹·S⁻¹·M を返す。
+     */
+    static AffineTransform unstretch(PrintSetup ps, Paginator.Page pg, Paginator.Segment s, double sx, double sy,
+                                     double mediaW, double mediaH) {
+        double nx = Math.rint(mediaW / 0.12), ny = Math.rint(mediaH / 0.12);
+        AffineTransform m = new AffineTransform();
+        if (ps.rtl) m.concatenate(PdfCanvas.flipAbout(ps.paperW / 2));
+        m.translate(pg.offsetX + s.dx * pg.scale, pg.offsetY + s.dy * pg.scale);
+        m.scale(pg.scale, pg.scale);
+        m.translate(-sx, -sy);
+        AffineTransform t = AffineTransform.getScaleInstance((nx - 1) / nx, (ny - 1) / ny);
+        t.concatenate(m);
+        try {
+            AffineTransform r = m.createInverse();
+            r.concatenate(t);
+            return r;
+        } catch (java.awt.geom.NoninvertibleTransformException e) {
+            return new AffineTransform();
+        }
+    }
+
     /** コメントの一覧の見出しと文字の間 (pt)。 */
     static final double NOTE_GAP = 3.43;
 
@@ -1010,6 +1012,7 @@ public final class Converter {
                         // 図形・グラフの切り抜きは外側に約 0.44pt (用紙上。ページの右端で切れる位置)
                         double ed = DRAWING_CLIP / pg.scale;
                         cv.clipRect(sx - ed, sy - ed, w + 2 * ed, h + 2 * ed);
+                        if (snap) cv.transform(unstretch(ps, pg, s, sx, sy, mediaW, mediaH));
                         j.drawings.paint(cv, sx, sy, sx + w, sy + h); // 簡易印刷は図形・グラフを印刷しない
                     }
                     cv.restore();

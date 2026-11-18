@@ -73,6 +73,7 @@ final class HeaderImages {
                 byte[] adj = adjust(data, im);
                 if (adj != data) key = key + "#" + im.getAttribute("cropleft") + im.getAttribute("croptop") + im.getAttribute("cropright")
                         + im.getAttribute("cropbottom") + im.getAttribute("grayscale") + im.getAttribute("gain") + im.getAttribute("blacklevel");
+                key = key + "@" + wh[0] + "x" + wh[1];   // メタファイルは大きさに合わせてラスタにするので、大きさごとに分ける
                 PDImageXObject img = Images.toPdf(ctx, key, adj, ip.getPartName().getName(), wh[0], wh[1]);
                 if (img != null) out.put(id, new Img(img, wh[0], wh[1]));
             }

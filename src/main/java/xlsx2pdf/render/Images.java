@@ -149,6 +149,7 @@ public final class Images {
             } else {
                 BufferedImage bi = decodeLimited(data);
                 if (bi != null) img = LosslessFactory.createFromImage(ctx.doc, bi);
+                else Warnings.add("画像「" + name + "」は読めない形式か、画素数の上限を超えるため描きませんでした", null);
             }
         } catch (IOException | RuntimeException e) {
             Warnings.add("画像「" + name + "」を変換できませんでした", e);

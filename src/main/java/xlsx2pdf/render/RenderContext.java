@@ -83,6 +83,7 @@ public final class RenderContext {
     }
 
     static void substituteMissingFonts(XSSFWorkbook wb) {
+        java.util.Set<String> warned = new java.util.HashSet<>();
         try {
             for (XSSFFont f : wb.getStylesSource().getFonts()) {
                 var ct = f.getCTFont();
@@ -100,6 +101,8 @@ public final class RenderContext {
                 else if (cs == 0 || cs == 161 || cs == 162 || cs == 186 || cs == 204 || cs == 238)
                     sub = fam == 1 ? "Times New Roman" : fam == 3 ? "Courier New" : "Arial";
                 else continue;
+                if (warned.add(name))
+                    Warnings.add("フォント「" + name + "」がないため、Excel と同じく「" + sub + "」で代用しました (文字の幅や改行の位置が変わることがあります)", null);
                 ct.getNameArray(0).setVal(sub);
             }
         } catch (RuntimeException e) {

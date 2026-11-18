@@ -376,6 +376,11 @@ final class VmlControls {
 
     /** セルの範囲 (例 "$H$1:$H$6"、"Sheet2!A1:A5") のセルの表示文字列 (数式は保存された値)。 */
     static List<String> rangeTexts(XSSFSheet sheet, String ref) {
+        return rangeTexts(sheet, ref, 0);
+    }
+
+    /** depth: 定義名をたどった回数 (自分自身や互いを参照する定義名で止まるよう、8 回まで)。 */
+    private static List<String> rangeTexts(XSSFSheet sheet, String ref, int depth) {
         List<String> out = new ArrayList<>();
         try {
             var wb = sheet.getWorkbook();
@@ -387,7 +392,7 @@ final class VmlControls {
                 sh = wb.getSheet(name);
                 r = r.substring(bang + 1);
             } else if (wb.getName(r) != null && wb.getName(r).getRefersToFormula() != null) {
-                return rangeTexts(sheet, wb.getName(r).getRefersToFormula());
+                return depth < 8 ? rangeTexts(sheet, wb.getName(r).getRefersToFormula(), depth + 1) : out;
             }
             if (sh == null) return out;
             var area = new org.apache.poi.ss.util.AreaReference(r, org.apache.poi.ss.SpreadsheetVersion.EXCEL2007);
@@ -440,6 +445,7 @@ final class VmlControls {
                     && sheet.getCTWorksheet().getPageSetup().getCellComments() == org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellComments.AS_DISPLAYED;
             NodeList shapes = root.getElementsByTagNameNS("*", "shape");
             for (int i = 0; i < shapes.getLength(); i++) {
+              try {
                 Element s = (Element) shapes.item(i);
                 Element cd = null;
                 for (Node n = s.getFirstChild(); n != null; n = n.getNextSibling())
@@ -560,6 +566,10 @@ final class VmlControls {
                     }
                 }
                 out.add(c);
+              } catch (RuntimeException | StackOverflowError e) {
+                // 1 つのコントロールが読めなくても、ほかのコントロールは読む
+                Warnings.add("フォームコントロールの定義を読めませんでした", e);
+              }
             }
         } catch (Exception e) {
             // 読めない描画は無視する

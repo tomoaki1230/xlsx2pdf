@@ -63,6 +63,7 @@ final class SvgPainter {
         p.vbW = vb[2];
         p.vbH = vb[3];
         p.index(root);
+        int depth = cv.depth();
         try {
             cv.save();
             cv.clipRect(r.getX(), r.getY(), r.getWidth(), r.getHeight());
@@ -73,7 +74,9 @@ final class SvgPainter {
             p.children(cv, root, Style.ROOT);
             cv.restore();
             return true;
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException | StackOverflowError e) {
+            // 途中のクリップ・viewBox の変換を戻してから、代わりの画像を描かせる
+            cv.restoreTo(depth);
             Warnings.add("SVG の画像を描けませんでした", e);
             return false;
         }
@@ -253,8 +256,9 @@ final class SvgPainter {
         double w = length(e.getAttribute("width"), vbW, vbW), h = length(e.getAttribute("height"), vbH, vbH);
         AffineTransform at = AffineTransform.getTranslateInstance(x, y);
         double[] vb = numbers(e.getAttribute("viewBox"));
+        // 入れ子の svg は viewBox の有無にかかわらず、自分の領域 (x・y・width・height) で切り抜く (overflow の既定は hidden)
+        if (w > 0 && h > 0) cv.clipRect(x, y, w, h);
         if (vb.length == 4 && vb[2] > 0 && vb[3] > 0) {
-            cv.clipRect(x, y, w, h);
             at.scale(w / vb[2], h / vb[3]);
             at.translate(-vb[0], -vb[1]);
         }
@@ -423,6 +427,10 @@ final class SvgPainter {
         AffineTransform gt = transform(gAttr(g, "gradientTransform", 0));
         if (gt != null) at.concatenate(gt);
         double rw = user ? vbW : 1, rh = user ? vbH : 1;
+        // PDF のシェーディングは色ごとの不透明度を持てないので、色の不透明度の平均 × 全体の不透明度で一様に塗る
+        double sa = 0;
+        for (Color c : cols) sa += c.getAlpha() / 255.0;
+        float a = (float) Math.max(0, Math.min(1, alpha * sa / cols.length));
         cv.save();
         cv.clip(s);
         cv.transform(at);
@@ -431,11 +439,18 @@ final class SvgPainter {
             double r = length(gAttr(g, "r", 0), user ? diag() / 2 : 0.5, user ? diag() : 1);
             String fxs = gAttr(g, "fx", 0), fys = gAttr(g, "fy", 0);
             double fx = fxs == null ? cx : length(fxs, cx, rw), fy = fys == null ? cy : length(fys, cy, rh);
-            cv.fillRadialStops(fx, fy, cx, cy, r, pos, cols);
+            if (!(r > 0)) {
+                // 半径 0 は最後の色で一様に塗る (SVG の規定)
+                cv.restore();
+                Color c = cols[cols.length - 1];
+                cv.fill(s, new Color(c.getRed(), c.getGreen(), c.getBlue(), (int) Math.round(alpha * c.getAlpha())));
+                return true;
+            }
+            cv.fillRadialStops(fx, fy, cx, cy, r, pos, cols, a);
         } else {
             double x1 = length(gAttr(g, "x1", 0), 0, rw), y1 = length(gAttr(g, "y1", 0), 0, rh);
             double x2 = length(gAttr(g, "x2", 0), user ? vbW : 1, rw), y2 = length(gAttr(g, "y2", 0), 0, rh);
-            cv.fillAxialStops(x1, y1, x2, y2, pos, cols);
+            cv.fillAxialStops(x1, y1, x2, y2, pos, cols, a);
         }
         cv.restore();
         return true;
@@ -467,6 +482,15 @@ final class SvgPainter {
 
     // ------------------------------------------------------------ クリップ
 
+    /** 要素の clip-rule (属性か style)。なければ null。 */
+    private static String clipRuleOf(Element e) {
+        if (e == null) return null;
+        String v = e.getAttribute("clip-rule");
+        if (!v.isEmpty()) return v.trim();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("clip-rule\\s*:\\s*([a-z]+)").matcher(e.getAttribute("style"));
+        return m.find() ? m.group(1) : null;
+    }
+
     /** clip-path="url(#id)" の形 (clipPath の子の形を合わせたもの。参照する要素の座標)。なければ null。 */
     private Shape clip(String v, Element owner) {
         if (v == null || !v.startsWith("url(")) return null;
@@ -474,6 +498,7 @@ final class SvgPainter {
         Element cp = ref(v.substring(4, end < 0 ? v.length() : end).trim().replace("\"", "").replace("'", ""));
         if (cp == null || !"clipPath".equals(cp.getLocalName())) return null;
         Path2D all = new Path2D.Double();
+        java.awt.geom.Area area = new java.awt.geom.Area();
         boolean bbox = "objectBoundingBox".equals(cp.getAttribute("clipPathUnits"));
         for (Element c : Xml.children(cp)) {
             Element el = "use".equals(c.getLocalName()) ? ref(href(c)) : c;
@@ -485,8 +510,15 @@ final class SvgPainter {
                 AffineTransform u = AffineTransform.getTranslateInstance(length(c.getAttribute("x"), 0, vbW), length(c.getAttribute("y"), 0, vbH));
                 if (t != null) t.concatenate(u); else t = u;
             }
-            all.append(t == null ? s : t.createTransformedShape(s), false);
+            // clip-rule (子、clipPath の順に継承): evenodd なら自己交差・内側の輪郭を穴にする
+            Path2D one = new Path2D.Double(t == null ? s : t.createTransformedShape(s));
+            String rule = clipRuleOf(c);
+            if (rule == null && el != c) rule = clipRuleOf(el);
+            if (rule == null) rule = clipRuleOf(cp);
+            one.setWindingRule("evenodd".equals(rule) ? Path2D.WIND_EVEN_ODD : Path2D.WIND_NON_ZERO);
+            area.add(new java.awt.geom.Area(one));
         }
+        all.append(area, false);
         AffineTransform ct = transform(cp.getAttribute("transform"));
         Shape out = ct == null ? all : ct.createTransformedShape(all);
         if (bbox) {

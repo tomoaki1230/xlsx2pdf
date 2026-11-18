@@ -338,6 +338,9 @@ public final class ExcelFormat {
     private static final String[] DOW = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
     private static final String[] DOW_JA = {"月", "火", "水", "木", "金", "土", "日"};
 
+    /** 日付にできる最大のシリアル値 (9999/12/31。1904 年基準はその分小さい)。 */
+    static final double MAX_DATE = 2958465, MAX_DATE_1904 = 2957003;
+
     /**
      * 日付・時刻を書式化する。
      *
@@ -346,6 +349,9 @@ public final class ExcelFormat {
      */
     String formatDate(double v, String body, String locale) {
         if (!DateUtil.isValidExcelDate(v) && !body.contains("[")) return "#".repeat(8);
+        // 9999/12/31 を超える値は日付にできず、Excel は # で埋める (経過時間 [h]・[m]・[s] の書式は除く)
+        boolean elapsed = body.toLowerCase(Locale.ROOT).matches("(?s).*\\[(h+|m+|s+)\\].*");
+        if (!elapsed && Math.floor(v) > (date1904 ? MAX_DATE_1904 : MAX_DATE)) return "#".repeat(8);
         // 秒の小数部の桁数
         int fracDigits = 0;
         Matcher fm = FRACTION_SECONDS.matcher(body.toLowerCase(Locale.ROOT));
@@ -359,6 +365,7 @@ public final class ExcelFormat {
         } catch (RuntimeException e) {
             dt = null;
         }
+        if (dt == null && !elapsed) return "#".repeat(8);   // 日付にできない値に、もっともらしい日付を出さない
         if (dt == null) dt = LocalDateTime.of(1900, 1, 1, 0, 0);
         // シリアル値 0 は Excel では 1900 年 1 月 0 日 (明治33年1月0日)
         boolean dayZero = !date1904 && Math.floor(rounded) == 0;
@@ -392,6 +399,7 @@ public final class ExcelFormat {
                 i += 2;
             } else if (c == '[') {
                 int j = b.indexOf(']', i);
+                if (j < 0) j = b.length();   // 閉じる ] がない書式は最後までを括弧の中とみなす
                 toks.add("E" + b.substring(i + 1, j).toLowerCase(Locale.ROOT));
                 i = j + 1;
             } else if (b.regionMatches(true, i, "AM/PM", 0, 5)) {
@@ -793,7 +801,7 @@ public final class ExcelFormat {
     static String fraction(double a, String p) {
         String[] parts = p.split("/");
         String left = parts[0].trim();
-        String den = parts[1].trim();
+        String den = parts.length > 1 ? parts[1].trim() : "?";   // "# ?/" のように分母のない書式は 1 桁の分母
         boolean hasInt = left.contains(" ");
         long whole = hasInt ? (long) Math.floor(a) : 0;
         double f = a - whole;

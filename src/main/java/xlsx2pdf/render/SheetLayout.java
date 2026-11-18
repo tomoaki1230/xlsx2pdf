@@ -1,5 +1,6 @@
 package xlsx2pdf.render;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -175,7 +176,7 @@ public final class SheetLayout {
         boolean[] widthSet = new boolean[maxCol];
         for (CTCols cols : ws.getColsArray()) {
             for (CTCol c : cols.getColArray()) {
-                int min = (int) c.getMin() - 1, max = (int) Math.min(c.getMax(), maxCol) - 1;
+                int min = (int) Math.max(1, c.getMin()) - 1, max = (int) Math.min(c.getMax(), maxCol) - 1;   // min="0" などの不正な値で負の添字にしない
                 for (int i = min; i <= max && i < maxCol; i++) {
                     if (c.isSetHidden() && c.getHidden()) colChars[i] = -1;
                     else if (c.isSetWidth()) { colChars[i] = c.getWidth(); widthSet[i] = true; }
@@ -228,7 +229,11 @@ public final class SheetLayout {
         rowFonts = new String[maxRow][];
         mergedList = sheet.getMergedRegions();
         for (CellRangeAddress a : mergedList) {
-            if (a.getNumberOfCells() > 2_000_000) continue;
+            // セルの多い結合 (列全体の結合など) は表に入れず、mergedAt で範囲を直接調べる (セル数は long で数える)
+            if ((long) (a.getLastRow() - a.getFirstRow() + 1) * (a.getLastColumn() - a.getFirstColumn() + 1) > 2_000_000) {
+                bigMerged.add(a);
+                continue;
+            }
             for (int r = a.getFirstRow(); r <= a.getLastRow(); r++)
                 for (int c = a.getFirstColumn(); c <= a.getLastColumn(); c++) merged.put(key(r, c), a);
         }
@@ -882,14 +887,14 @@ public final class SheetLayout {
             if (linear && this.scale != 1)
                 dev = Math.floor(dev * this.scale + 0.5 + 1e-9) / this.scale;   // 100% のプリンタの画素 × 倍率を列ごとに四捨五入 (拡大も同じ)
             if (numWidePx != null && i < numWidePx.length && numWidePx[i] >= 0) {
-                if (numWidePx[i] > px) dev = Math.rint(numWidePx[i] * f.mdwP / cm);
+                if (numWidePx[i] > px) dev = Math.floor(numWidePx[i] * f.mdwP / cm + 0.5);
                 else dev += NUM_WIDEN_ADD;
                 if (linear && this.scale != 1) dev = Math.floor(dev * this.scale + 0.5 + 1e-9) / this.scale;
             }
             colW[i] = dev * f.ptX;
             colW100[i] = dev100 * f.ptX;   // 長い数値の広がりは含めない
             if (fitPx != null && fitPx[i] > px && fitPx[i] > (numWidePx != null && i < numWidePx.length ? numWidePx[i] : 0)) {
-                dev = Math.rint(fitPx[i] * f.mdwP / cm);
+                dev = Math.floor(fitPx[i] * f.mdwP / cm + 0.5);
                 if (linear && this.scale != 1) dev = Math.floor(dev * this.scale + 0.5 + 1e-9) / this.scale;
                 colW[i] = dev * f.ptX;
             }
@@ -935,7 +940,14 @@ public final class SheetLayout {
     static long key(int r, int c) { return (long) r * 16384 + c; }
 
     /** セルを含む結合範囲 (なければ null)。 */
-    public CellRangeAddress mergedAt(int r, int c) { return merged.get(key(r, c)); }
+    public CellRangeAddress mergedAt(int r, int c) {
+        CellRangeAddress a = merged.get(key(r, c));
+        if (a == null) for (CellRangeAddress b : bigMerged) if (b.isInRange(r, c)) return b;
+        return a;
+    }
+
+    /** セルの多い結合範囲 (表に入れないもの)。 */
+    private final List<CellRangeAddress> bigMerged = new ArrayList<>();
 
     /** 列の左端の位置 (シートの pt)。 */
     public double x(int col) {
@@ -1028,7 +1040,9 @@ public final class SheetLayout {
     static final int NUM_WIDEN_FMT_MIN = 8;
     /** 表示形式のある数値は 表示の文字数 − 1 で表を引く。 */
     static final int NWF_OFF = 1;
-    private static final org.apache.poi.ss.usermodel.DataFormatter NUM_DF = new org.apache.poi.ss.usermodel.DataFormatter(java.util.Locale.ROOT);
+    /** 数値の書式化 (DataFormatter はスレッドセーフでないので、同時の変換のためにスレッドごとに持つ)。 */
+    private static final ThreadLocal<org.apache.poi.ss.usermodel.DataFormatter> NUM_DF =
+            ThreadLocal.withInitial(() -> new org.apache.poi.ss.usermodel.DataFormatter(java.util.Locale.ROOT));
     /** 広がる対象の最後の列 (AA)。 */
     private static final int NUM_WIDEN_LAST = 26;
     /** 数字幅・ppem ごとの、6〜11 桁の数値の列の幅 (画面 px)。 */
@@ -1098,7 +1112,7 @@ public final class SheetLayout {
                 if (cell.getCellStyle().getDataFormat() != 0) {
                     // 表示形式のある数値: 表示の文字数で同じ表を引く (「#,##0.00」の 8〜10 文字 → 76・84・93 px)
                     if (!hasColElems || !model.nonExcel) continue;   // Excel で保存したブックは広げない
-                    String txt = NUM_DF.formatRawCellContents(cell.getNumericCellValue(), cell.getCellStyle().getDataFormat(), cell.getCellStyle().getDataFormatString());
+                    String txt = NUM_DF.get().formatRawCellContents(cell.getNumericCellValue(), cell.getCellStyle().getDataFormat(), cell.getCellStyle().getDataFormatString());
                     int len = txt.length();
                     if (len >= NUM_WIDEN_FMT_MIN) found = true;
                     if (len < 7 || txt.indexOf('#') >= 0) continue;
@@ -1138,13 +1152,13 @@ public final class SheetLayout {
         boolean any = false;
         for (CTCols cols : ws.getColsArray())
             for (CTCol c : cols.getColArray())
-                for (long i = c.getMin() - 1; i < Math.min(c.getMax(), maxCol); i++) if (c.isSetWidth()) elem[(int) i] = true;
+                for (long i = Math.max(1, c.getMin()) - 1; i < Math.min(c.getMax(), maxCol); i++) if (c.isSetWidth()) elem[(int) i] = true;
         for (CTCols cols : ws.getColsArray())
             for (CTCol c : cols.getColArray()) {
                 if (!(c.isSetCustomWidth() && c.getCustomWidth())) continue;
                 any = true;
                 if (c.getMin() <= 1 && c.getMax() >= 16384) continue;   // 全列の指定は、列そのものは customWidth のない列として扱う
-                for (long i = c.getMin() - 1; i < Math.min(c.getMax(), maxCol); i++) cw[(int) i] = true;
+                for (long i = Math.max(1, c.getMin()) - 1; i < Math.min(c.getMax(), maxCol); i++) cw[(int) i] = true;
             }
         if (!any) return;
         FontManager fm = model.fontManager();

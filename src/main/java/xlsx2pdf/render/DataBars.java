@@ -158,7 +158,8 @@ final class DataBars {
             end = rule.minLength + f * (rule.maxLength - rule.minLength);
         } else {
             // 軸あり: 正と負を同じ縮尺で、軸から伸ばす
-            double scale = rule.axisPosition.equals("middle") ? 2 * Math.max(Math.abs(lo), Math.abs(hi)) : hi - lo;
+            // 自動の軸は 0 をはさんだ範囲 (すべて負なら 0 〜 最小。hi − lo では最長の棒がセルの外へ出る)
+            double scale = rule.axisPosition.equals("middle") ? 2 * Math.max(Math.abs(lo), Math.abs(hi)) : Math.max(0, hi) - Math.min(0, lo);
             if (scale <= 0) scale = 1;
             if (v >= 0) { start = axis; end = axis + Math.min(v, Math.max(0, hi)) / scale; }
             else { neg = true; end = axis; start = axis - Math.min(-v, Math.max(0, -lo)) / scale; }

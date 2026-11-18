@@ -195,7 +195,6 @@ public final class ChartPainter {
 
         // グラフエリアの背景
         chartRect = r;
-        dumpPlot = null; dumpLegend = null; dumpVal = null;
         Element v3 = Xml.path(root, "chart", "view3D");
         rotX = Xml.doubleAttr(Xml.child(v3, "rotX"), "val", 15);
         rotY = Xml.doubleAttr(Xml.child(v3, "rotY"), "val", 20);
@@ -260,7 +259,7 @@ public final class ChartPainter {
         Element legend = Xml.child(chart, "legend");
         Rectangle2D plotBox = new Rectangle2D.Double(inner.getX(), top, inner.getWidth(), inner.getMaxY() - top);
         chartAxes = axes;
-        if (legend != null) plotBox = paintLegend(cv, legend, groups, plotBox, inner);
+        if (legend != null && !groups.isEmpty()) plotBox = paintLegend(cv, legend, groups, plotBox, inner);   // 描ける系列がなければ凡例もない
 
         // プロットエリアの手動レイアウト
         Element layout = Xml.path(plotArea, "layout", "manualLayout");
@@ -275,7 +274,6 @@ public final class ChartPainter {
         if (groups.isEmpty()) {
             cv.restore();
             if (border != null) dp.strokeShape(cv, frameArea, border);
-            dumpChart(r);
             return;
         }
         boolean radial = groups.get(0).type.equals("pie") || groups.get(0).type.equals("doughnut");
@@ -288,22 +286,8 @@ public final class ChartPainter {
         }
         cv.restore();
         if (border != null) dp.strokeShape(cv, frameArea, border);
-        dumpChart(r);
     }
 
-    /** 値の書き出し (開発用): グラフの位置、プロットの内側・凡例はグラフの左上からの pt、値の軸の範囲 (scripts/dump-excel.ps1 と同じ形)。 */
-    private Rectangle2D dumpPlot, dumpLegend;
-    private Axis dumpVal;
-
-    private void dumpChart(Rectangle2D r) {
-        if (!ValueDump.ON) return;
-        ValueDump.add("chart", "-", r.getX(), r.getY(), r.getWidth(), r.getHeight(), "-");
-        if (dumpPlot != null)
-            ValueDump.add("plot", "-", dumpPlot.getX() - r.getX(), dumpPlot.getY() - r.getY(), dumpPlot.getWidth(), dumpPlot.getHeight());
-        if (dumpLegend != null)
-            ValueDump.add("legend", "-", dumpLegend.getX() - r.getX(), dumpLegend.getY() - r.getY(), dumpLegend.getWidth(), dumpLegend.getHeight());
-        if (dumpVal != null) ValueDump.add("vaxis", "-", dumpVal.lo, dumpVal.hi, dumpVal.unit);
-    }
 
     /** 単色の塗りつぶし。 */
     private static DrawingPainter.Paint solid(Color c) {
@@ -1082,7 +1066,6 @@ public final class ChartPainter {
             box = new Rectangle2D.Double(outer.getX() + x * outer.getWidth(), outer.getY() + y * outer.getHeight(), w, h);
             if (cr == null) box = inner;
         }
-        dumpLegend = box;
         Element spPr = Xml.child(legend, "spPr");
         if (spPr != null) {
             dp.fillShape(cv, box, dp.paint(DrawingPainter.fillElement(spPr), null, null), null);
@@ -1184,7 +1167,7 @@ public final class ChartPainter {
         double lo = a.min != null ? a.min : Math.min(0, dmin);
         double hi = a.max != null ? a.max : Math.max(0, dmax);
         if (a.min == null && dmin > 0 && (dmax - dmin) / dmax < 1.0 / 6) lo = dmin - (dmax - dmin) / 2; // Excel は最小値を引き上げる
-        if (hi == lo) hi = lo + 1;
+        if (hi == lo) hi = lo + Math.max(1, Math.abs(lo) * 1e-9);   // 大きな値では + 1 で変わらない
         // 目盛りの間隔: 1, 2, 5 × 10^n の小さい方から試し、丸めた範囲で目盛りの間隔が gap 以上になる最初のもの
         // (Excel の印刷: 0〜45 を 5 刻み、-4〜8 を 2 刻み。目盛りは 10 区間まで)
         double unit = a.majorUnit != null ? a.majorUnit : niceUnit(hi - lo, 10);
@@ -1207,10 +1190,15 @@ public final class ChartPainter {
             if (a.majorUnit != null || (intervals <= a.maxIntervals + 0.001 && lengthPt / intervals >= gap) || intervals <= 2.001) break;
             unit = nextNice(unit);
         }
+        // 手で入れた目盛りの間隔が範囲に比べて極端に小さい (0 以下を含む) と、目盛りの線とラベルが際限なく増えるので上限を設ける
+        if (!(unit > 0) || (hi - lo) / unit > MAX_TICKS) unit = (hi - lo) / MAX_TICKS;
         a.lo = lo;
         a.hi = hi;
         a.unit = unit;
     }
+
+    /** 1 本の軸の目盛りの数の上限 (変換が止まらないためのもの)。 */
+    static final int MAX_TICKS = 10000;
 
     /** 1, 2, 5 × 10^n の次の値。 */
     static double nextNice(double u) {
@@ -1272,6 +1260,8 @@ public final class ChartPainter {
         }
         if (valAx == null) { valAx = new Axis(); valAx.kind = "valAx"; valAx.pos = horiz ? "b" : "l"; }
         if (catAx == null && !scatter) { catAx = new Axis(); catAx.kind = "catAx"; catAx.pos = horiz ? "l" : "b"; }
+        // 項目の軸の反転 (maxMin) は、項目名だけでなく棒・線・点の位置も逆にする
+        catReverse = catAx != null && catAx.reverse;
         if (scatter && xValAx == null) { xValAx = new Axis(); xValAx.kind = "valAx"; xValAx.pos = "b"; }
 
         midCat = !scatter && "midCat".equals(valAx.crossBetween);
@@ -1512,15 +1502,13 @@ public final class ChartPainter {
             // 系列が奥行きに並ぶ 3D は、目盛りを粗くする (Excel の印刷: 0〜15 を 5 刻み)
             autoScale(valAx, dmin, dmax, horiz ? plot.getWidth() : plot.getHeight(), ribbon ? vgap * RIBBON_VGAP : vgap);
         }
-        dumpPlot = plot;
-        dumpVal = valAx;
         // 補助目盛線 (主目盛線の下)
         if (valAx.gridMinor && !valAx.logScale) {
             DrawingPainter.LineStyle mg = valAx.gridMinorSpPr != null && Xml.child(valAx.gridMinorSpPr, "ln") != null
                     ? dp.line(Xml.child(valAx.gridMinorSpPr, "ln"), null, null) : defaultLine(new Color(0xF2F2F2), 0.75);
             double mu = valAx.minorUnit != null && valAx.minorUnit > 0 ? valAx.minorUnit : valAx.unit / 5;
             if (mg != null && mu > 0 && (valAx.hi - valAx.lo) / mu < 1000) {
-                for (double v = valAx.lo; v <= valAx.hi + mu * 1e-6; v += mu) {
+                for (double v = valAx.lo; v <= valAx.hi + mu * 1e-6 && v + mu > v; v += mu) {
                     double p = valPos(valAx, v, plot, horiz);
                     dp.strokeShape(cv, horiz ? new Line2D.Double(p, plot.getY(), p, plot.getMaxY()) : new Line2D.Double(plot.getX(), p, plot.getMaxX(), p), mg);
                 }
@@ -1926,7 +1914,9 @@ public final class ChartPainter {
 
     /** 次の目盛りの値 (対数目盛は底を掛ける)。 */
     private static double step(Axis a, double v) {
-        return a.logScale ? v * a.logBase : v + a.unit;
+        double n = a.logScale ? v * a.logBase : v + a.unit;
+        // 進まないとき (間隔が 0、値が大きすぎて足しても変わらない、無限大) は NaN を返して目盛りのループを終える
+        return n > v && Double.isFinite(n) ? n : Double.NaN;
     }
 
     /** 値の位置 (pt)。 */
@@ -2057,7 +2047,11 @@ public final class ChartPainter {
     /** 縦の値の軸の横の位置。 */
     private double valAxisX;
 
+    /** 項目の軸が反転 (maxMin) か。 */
+    private boolean catReverse;
+
     private double catCenter(int i, int n, Rectangle2D plot, boolean horiz, boolean reverse) {
+        reverse |= catReverse;
         if (midCat && n > 1) {
             double len = horiz ? plot.getHeight() : plot.getWidth();
             int k = reverse ? n - 1 - i : i;
@@ -2085,8 +2079,10 @@ public final class ChartPainter {
         double[] posAcc = new double[n], negAcc = new double[n], totals = new double[n];
         if (percent) for (Series s : g.series) for (int i = 0; i < n && i < s.vals.size(); i++) if (s.vals.get(i) != null) totals[i] += Math.abs(s.vals.get(i));
         // 区分線のための、棒の矩形と値の端の位置
-        Rectangle2D[][] rects = new Rectangle2D[g.series.size()][n];
-        double[][] ends = new double[g.series.size()][n];
+        // 系列線を描くときだけ使う (使わないときは確保しない)
+        boolean keep = stacked && g.serLines != null && d3x == 0;
+        Rectangle2D[][] rects = keep ? new Rectangle2D[g.series.size()][n] : null;
+        double[][] ends = keep ? new double[g.series.size()][n] : null;
         for (int si = 0; si < g.series.size(); si++) {
             Series s = g.series.get(si);
             if (d3x > 0 && noFill(s)) continue; // 3D の塗りなしの系列は描かない
@@ -2095,6 +2091,7 @@ public final class ChartPainter {
             for (int i = 0; i < n && i < s.vals.size(); i++) {
                 Double v = s.vals.get(i);
                 if (v == null) continue;
+                final double raw = v;   // データラベルの値は元の値 (100% 積み上げでも割合にしない)
                 if (percent) v = totals[i] == 0 ? 0 : v / totals[i];
                 double base;
                 double from, to;
@@ -2129,7 +2126,8 @@ public final class ChartPainter {
                     Element inv = null;
                     for (Element ex : Xml.children(Xml.child(s.ser, "extLst"), "ext"))
                         for (Element f : Xml.children(ex, "invertSolidFillFmt")) inv = Xml.child(f, "spPr");
-                    Color ic = inv != null && DrawingPainter.fillElement(inv) != null ? dp.paint(DrawingPainter.fillElement(inv), null, null).color : null;
+                    DrawingPainter.Paint ip = inv != null && DrawingPainter.fillElement(inv) != null ? dp.paint(DrawingPainter.fillElement(inv), null, null) : null;
+                    Color ic = ip != null ? ip.color : null;
                     p = solid(ic != null ? ic : Color.WHITE);
                     invOutline = ic == null; // 色の指定がなければ白で塗り、黒の 0.75pt の枠を描く
                 }
@@ -2143,10 +2141,12 @@ public final class ChartPainter {
                     String shape = Xml.attr(Xml.child(s.ser, "shape"), "val", g.shape);
                     if (!shape.equals("box")) {
                         paintShapedBar(cv, front, bx, by, bcol, horiz, shape, v < 0);
-                        paintDataLabel(cv, g, s, i, v, horiz ? new double[] {Math.max(from, to), front.getCenterY()} : new double[] {front.getCenterX(), Math.min(from, to)}, front);
-                        rects[si][i] = front;
-                        ends[si][i] = to;
-                        centers[i] = front.getCenterX();
+                        paintDataLabel(cv, g, s, i, raw, horiz ? new double[] {to, front.getCenterY()} : new double[] {front.getCenterX(), to}, front);
+                        if (keep) {
+                            rects[si][i] = front;
+                            ends[si][i] = to;
+                        }
+                        centers[i] = horiz ? front.getCenterY() : front.getCenterX();
                         continue;
                     }
                     cv.fill(poly(x0, y0, x1, y0, x1 + bx, y0 + by, x0 + bx, y0 + by), shade(bcol, 0.8));
@@ -2157,15 +2157,17 @@ public final class ChartPainter {
                 if (invOutline) cv.stroke(bar, new PdfCanvas.Stroke(0.75f), Color.BLACK);
                 else if (ls != null) dp.strokeShape(cv, bar, ls);
                 else if (dp.bw) cv.stroke(bar, new PdfCanvas.Stroke(0.75f), Color.BLACK); // 白黒印刷: 白の棒も見えるように黒の枠
-                rects[si][i] = bar;
-                ends[si][i] = to;
-                paintDataLabel(cv, g, s, i, v, horiz ? new double[] {Math.max(from, to), bar.getCenterY()} : new double[] {bar.getCenterX(), Math.min(from, to)}, bar);
-                centers[i] = bar.getCenterX();
+                if (keep) {
+                    rects[si][i] = bar;
+                    ends[si][i] = to;
+                }
+                paintDataLabel(cv, g, s, i, raw, horiz ? new double[] {to, bar.getCenterY()} : new double[] {bar.getCenterX(), to}, bar);
+                centers[i] = horiz ? bar.getCenterY() : bar.getCenterX();
             }
-            if (!horiz) paintErrorBars(cv, s, i -> centers[i], valAx, plot);
+            paintErrorBars(cv, s, i -> centers[i], valAx, plot, horiz);
         }
         if (!horiz) for (Series s : g.series) paintTrendlines(cv, s, catXs(n, plot), valAx, plot);
-        if (stacked && g.serLines != null && d3x == 0) paintSerLines(cv, g, rects, ends, horiz);
+        if (keep) paintSerLines(cv, g, rects, ends, horiz);
     }
 
     /**
@@ -2326,7 +2328,7 @@ public final class ChartPainter {
                 if (g.markers) for (int i = 0; i < n; i++) if (pts[i] != null) marker(cv, s, si, pts[i][0], pts[i][1]);
                 paintTrendlines(cv, s, catXs(n, plot), valAx, plot);
                 final int nn = n;
-                paintErrorBars(cv, s, i -> catCenter(i, nn, plot, false, false), valAx, plot);
+                paintErrorBars(cv, s, i -> catCenter(i, nn, plot, false, false), valAx, plot, false);
             }
             for (int i = 0; i < n && i < s.vals.size(); i++) {
                 if (pts[i] != null && s.vals.get(i) != null)
@@ -2406,7 +2408,7 @@ public final class ChartPainter {
     }
 
     /** 誤差範囲の各点の [下端, 上端] (値のない点は null)。 */
-    private static List<double[]> errorSpans(Series s, Element eb) {
+    private List<double[]> errorSpans(Series s, Element eb) {
         String bt = Xml.attr(Xml.child(eb, "errBarType"), "val", "both");
         String vt = Xml.attr(Xml.child(eb, "errValType"), "val", "fixedVal");
         double val = Xml.doubleAttr(Xml.child(eb, "val"), "val", 1);
@@ -2417,6 +2419,17 @@ public final class ChartPainter {
         for (Double v : s.vals) if (v != null) sd += (v - mean) * (v - mean);
         sd = cnt > 1 ? Math.sqrt(sd / (cnt - 1)) : 0;
         List<double[]> out = new ArrayList<>();
+        if (vt.equals("cust")) {
+            // ユーザー設定: 正・負の誤差の値 (c:plus・c:minus の参照またはリテラル。1 つだけなら全点に使う)
+            List<Double> plus = numbers(Xml.firstChild(Xml.child(eb, "plus"))), minus = numbers(Xml.firstChild(Xml.child(eb, "minus")));
+            for (int i = 0; i < s.vals.size(); i++) {
+                Double v = s.vals.get(i);
+                if (v == null) { out.add(null); continue; }
+                double ep = custErr(plus, i), em = custErr(minus, i);
+                out.add(new double[] {bt.equals("plus") ? v : v - em, bt.equals("minus") ? v : v + ep});
+            }
+            return out;
+        }
         for (Double v : s.vals) {
             if (v == null) { out.add(null); continue; }
             double e = switch (vt) {
@@ -2432,11 +2445,18 @@ public final class ChartPainter {
         return out;
     }
 
-    /** 系列の誤差範囲 (縦方向) を描く。at は各点の横の位置。 */
-    private void paintErrorBars(PdfCanvas cv, Series s, java.util.function.IntToDoubleFunction at, Axis va, Rectangle2D plot) throws IOException {
+    /** ユーザー設定の誤差の i 番目の値 (なければ 0、1 つだけなら全点に同じ値)。 */
+    private static double custErr(List<Double> v, int i) {
+        Double d = v.size() == 1 ? v.get(0) : i < v.size() ? v.get(i) : null;
+        return d == null ? 0 : Math.abs(d);
+    }
+
+    /** 系列の誤差範囲 (値の方向) を描く。at は各点の項目の方向の位置。horiz は横棒 (値が横)。 */
+    private void paintErrorBars(PdfCanvas cv, Series s, java.util.function.IntToDoubleFunction at, Axis va, Rectangle2D plot,
+                                boolean horiz) throws IOException {
         if (s.ser == null) return;
         for (Element eb : Xml.children(s.ser, "errBars")) {
-            if ("x".equals(Xml.attr(Xml.child(eb, "errDir"), "val", "y"))) continue;
+            if (!horiz && "x".equals(Xml.attr(Xml.child(eb, "errDir"), "val", "y"))) continue;
             String bt = Xml.attr(Xml.child(eb, "errBarType"), "val", "both");
             boolean cap = !Xml.boolAttr(Xml.child(eb, "noEndCap"), "val", false);
             DrawingPainter.LineStyle ls = extraLine(eb);
@@ -2444,12 +2464,20 @@ public final class ChartPainter {
             for (int i = 0; i < spans.size(); i++) {
                 if (spans.get(i) == null) continue;
                 double lo = spans.get(i)[0], hi = spans.get(i)[1];
-                double x = at.applyAsDouble(i);
-                double y0 = valPos(va, clamp(hi, va), plot, false), y1 = valPos(va, clamp(lo, va), plot, false);
-                dp.strokeShape(cv, new Line2D.Double(x, y0, x, y1), ls);
+                double c = at.applyAsDouble(i);
+                double v0 = valPos(va, clamp(hi, va), plot, horiz), v1 = valPos(va, clamp(lo, va), plot, horiz);
+                if (horiz) {
+                    dp.strokeShape(cv, new Line2D.Double(v0, c, v1, c), ls);
+                    if (cap) {
+                        if (!bt.equals("minus")) dp.strokeShape(cv, new Line2D.Double(v0, c - 3, v0, c + 3), ls);
+                        if (!bt.equals("plus")) dp.strokeShape(cv, new Line2D.Double(v1, c - 3, v1, c + 3), ls);
+                    }
+                    continue;
+                }
+                dp.strokeShape(cv, new Line2D.Double(c, v0, c, v1), ls);
                 if (cap) {
-                    if (!bt.equals("minus")) dp.strokeShape(cv, new Line2D.Double(x - 3, y0, x + 3, y0), ls);
-                    if (!bt.equals("plus")) dp.strokeShape(cv, new Line2D.Double(x - 3, y1, x + 3, y1), ls);
+                    if (!bt.equals("minus")) dp.strokeShape(cv, new Line2D.Double(c - 3, v0, c + 3, v0), ls);
+                    if (!bt.equals("plus")) dp.strokeShape(cv, new Line2D.Double(c - 3, v1, c + 3, v1), ls);
                 }
             }
         }
@@ -3766,7 +3794,6 @@ public final class ChartPainter {
         for (int i = 0; i < s.vals.size(); i++) emax = Math.max(emax, explosion(s, i));
         d /= 1 + emax / 100;
         double cx0 = box.getCenterX(), cy0 = box.getCenterY();
-        dumpPlot = new Rectangle2D.Double(cx0 - d / 2, cy0 - d / 2, d, d);
         double start = 90 - g.firstSliceAng; // Java の角度は 3 時の方向から反時計回り
         double hole = g.type.equals("doughnut") ? g.holeSize / 100.0 : 0;
         DrawingPainter.LineStyle edge = s.spPr != null && Xml.child(s.spPr, "ln") != null ? dp.line(Xml.child(s.spPr, "ln"), null, null)
@@ -3864,10 +3891,10 @@ public final class ChartPainter {
     /** レーダーチャートを描く。 */
     private void paintRadar(PdfCanvas cv, Group g, List<Axis> axes, Rectangle2D box) throws IOException {
         int n = 0;
-        double max = 0;
+        double max = 0, min = 0;
         for (Series s : g.series) {
             n = Math.max(n, s.vals.size());
-            for (Double v : s.vals) if (v != null) max = Math.max(max, v);
+            for (Double v : s.vals) if (v != null) { max = Math.max(max, v); min = Math.min(min, v); }
         }
         if (n < 3) return;
         Axis va = new Axis();
@@ -3879,7 +3906,7 @@ public final class ChartPainter {
         // 項目名の分を空けた半径
         double rad = Math.min(box.getWidth(), box.getHeight()) / 2 - textLineH(ct, g.series.isEmpty() ? List.of() : g.series.get(0).cats) - (legacy ? RADAR_LABEL_GAP : 1.1);
         rad = Math.max(rad, Math.min(box.getWidth(), box.getHeight()) / 4);
-        autoScale(va, 0, max, rad, lineH(vt) * 0.6);
+        autoScale(va, min, max, rad, lineH(vt) * 0.6);   // 負の値があれば中心は負の最小 (中心の反対側に点を置かない)
         // レーダーは上端の余裕を取らない (Excel: 最大 6 で 0〜6)
         if (va.max == null && !va.logScale && va.hi - va.unit >= max - 1e-9 && va.hi - va.unit > va.lo) va.hi -= va.unit;
         double cx = box.getCenterX(), cy = box.getCenterY();
@@ -3990,16 +4017,19 @@ public final class ChartPainter {
         double x = at[0], y = at[1];
         for (String line : lab.split("\n")) {
             if (bar != null && !g.horizontal) {
+                // at の y は値の側の端。上へ伸びる棒 (正の値) と下へ伸びる棒 (負の値) で向きを変える
+                boolean up = Math.abs(y - bar.getY()) <= Math.abs(y - bar.getMaxY());
                 switch (pos) {
                     case "ctr" -> text(cv, line, bar.getCenterX(), bar.getCenterY(), t, 0, 0);
-                    case "inEnd" -> text(cv, line, x, y + 2, t, 0, -1);
-                    case "inBase" -> text(cv, line, x, bar.getMaxY() - 2, t, 0, 1);
-                    default -> text(cv, line, x, y - 2, t, 0, 1);
+                    case "inEnd" -> text(cv, line, x, up ? y + 2 : y - 2, t, 0, up ? -1 : 1);
+                    case "inBase" -> text(cv, line, x, up ? bar.getMaxY() - 2 : bar.getY() + 2, t, 0, up ? 1 : -1);
+                    default -> text(cv, line, x, up ? y - 2 : y + 2, t, 0, up ? 1 : -1);
                 }
             } else if (bar != null) {
+                boolean right = Math.abs(x - bar.getMaxX()) <= Math.abs(x - bar.getX());
                 switch (pos) {
                     case "ctr" -> text(cv, line, bar.getCenterX(), bar.getCenterY(), t, 0, 0);
-                    default -> text(cv, line, x + 3, y, t, -1, 0);
+                    default -> text(cv, line, right ? x + 3 : x - 3, y, t, right ? -1 : 1, 0);
                 }
             } else if (g.type.equals("pie") || g.type.equals("doughnut")) {
                 if (!Double.isNaN(mx) && pieR > 0 && chartRect != null) {

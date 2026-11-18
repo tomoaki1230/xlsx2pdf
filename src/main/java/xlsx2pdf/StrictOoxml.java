@@ -34,10 +34,10 @@ final class StrictOoxml {
         try (ZipInputStream zi = new ZipInputStream(zip)) {
             ZipEntry e;
             int seen = 0;
-            while ((e = zi.getNextEntry()) != null && seen < 64) {
+            // 読み飛ばす項目も展開されるので、見るのは先頭の 16 項目まで (Excel は _rels/.rels・xl/workbook.xml を先頭近くに置く)
+            while ((e = zi.getNextEntry()) != null && seen++ < 16) {
                 String n = e.getName();
                 if (!(n.equals("_rels/.rels") || n.equals("xl/workbook.xml"))) continue;
-                seen++;
                 byte[] b = readLimited(zi, Math.min(maxEntryBytes > 0 ? maxEntryBytes : Long.MAX_VALUE, 4L << 20));
                 if (indexOf(b, STRICT_BYTES) >= 0) return true;
                 if (n.equals("xl/workbook.xml")) return false;
@@ -99,9 +99,24 @@ final class StrictOoxml {
         return -1;
     }
 
+    /** ファイルの zip に Strict の名前空間があるか (目次から 2 つの項目だけを読む。ほかの項目は展開しない)。 */
+    static boolean isStrict(java.io.File f, long maxEntryBytes) throws IOException {
+        try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(f)) {
+            for (String n : new String[] {"_rels/.rels", "xl/workbook.xml"}) {
+                ZipEntry e = z.getEntry(n);
+                if (e == null) continue;
+                try (InputStream in = z.getInputStream(e)) {
+                    byte[] b = readLimited(in, Math.min(maxEntryBytes > 0 ? maxEntryBytes : Long.MAX_VALUE, 4L << 20));
+                    if (indexOf(b, STRICT_BYTES) >= 0) return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** バイト列が Strict なら書き換え、そうでなければ null。 */
     static byte[] convertIfStrict(byte[] book, long maxEntryBytes) throws IOException {
         if (!isStrict(new ByteArrayInputStream(book), maxEntryBytes)) return null;
-        return toTransitional(new ByteArrayInputStream(book), maxEntryBytes, 1L << 30);
+        return toTransitional(new ByteArrayInputStream(book), maxEntryBytes, maxEntryBytes > 0 ? 1L << 30 : 0);
     }
 }

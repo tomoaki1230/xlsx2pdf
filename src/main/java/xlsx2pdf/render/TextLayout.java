@@ -248,7 +248,9 @@ public final class TextLayout {
             if (wrap && maxWidth > 0 && !cur.isEmpty()) {
                 int prev = cur.get(cur.size() - 1).cp;
                 if (breakable(prev, c.cp)) lastBreak = cur.size();
-                if (curW + c.w > maxWidth + 0.01 && (wideSpaceWraps ? c.cp != ' ' : !isSpace(c.cp))) {
+                // 段落の最初の行は字下げ (firstOffset − otherOffset。負ならぶら下げ) の分だけ使える幅が変わる
+                float mw = firstLine ? maxWidth - (firstOffset - otherOffset) : maxWidth;
+                if (curW + c.w > mw + 0.01 && (wideSpaceWraps ? c.cp != ' ' : !isSpace(c.cp))) {
                     List<Ch> next;
                     if (lastBreak > 0) {
                         next = new ArrayList<>(cur.subList(lastBreak, cur.size()));

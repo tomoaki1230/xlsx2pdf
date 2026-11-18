@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * この形に合わないので、文字列を「まとまり」(インド系は音節、右から左の文字は語句) に分け、まとまり 1 つを
  * 私用面 (U+100000 以降) の 1 コードポイントに置き換える ({@link #cluster})。まとまりの送り幅と輪郭は、
  * 書体ごとに AWT の整形 (HarfBuzz。GSUB・GPOS を使う) で求める ({@link #shape})。描画は輪郭の塗りで行う
- * (PDF の文字としては残らない)。{@code -Dx2p.complex=0} で無効。
+ * (PDF の文字としては残らない)。
  */
 public final class ComplexText {
     private ComplexText() {}

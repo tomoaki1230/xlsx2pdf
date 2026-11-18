@@ -67,7 +67,24 @@ public final class PdfCanvas implements AutoCloseable {
     }
 
     /** グラフィックス状態を保存する。 */
-    public void save() throws IOException { cs.saveGraphicsState(); }
+    public void save() throws IOException { cs.saveGraphicsState(); depth++; }
+
+    /** save の入れ子の深さ。 */
+    private int depth;
+
+    /** いまの save の深さ (例外のときに {@link #restoreTo} で戻すために覚える)。 */
+    public int depth() { return depth; }
+
+    /**
+     * save の深さを d まで戻す。描く途中で例外が起きて restore が飛ばされても、クリップや変換が後の描画に残らないようにする。
+     */
+    public void restoreTo(int d) {
+        try {
+            while (depth > d) restore();
+        } catch (IOException e) {
+            // 書けなければ戻せない (ページの書き出しも失敗する)
+        }
+    }
 
     /** 文字の左右反転を打ち消す (右から左のシートで、本体を左右反転して描くとき)。 */
     public boolean mirrorText;
@@ -80,7 +97,11 @@ public final class PdfCanvas implements AutoCloseable {
     }
 
     /** グラフィックス状態を戻す。 */
-    public void restore() throws IOException { cs.restoreGraphicsState(); }
+    public void restore() throws IOException {
+        if (depth == 0) return;   // 対応する save のない restore は書かない (PDF の q・Q の数を合わせる)
+        cs.restoreGraphicsState();
+        depth--;
+    }
 
     /** 座標変換を追加する。 */
     public void transform(AffineTransform at) throws IOException {
@@ -170,6 +191,11 @@ public final class PdfCanvas implements AutoCloseable {
      * (PDF の軸方向のシェーディング。色が 3 つ以上なら関数をつなぐ)。座標は今の変換の中の座標。
      */
     public void fillAxialStops(double x0, double y0, double x1, double y1, double[] pos, Color[] cols) throws IOException {
+        fillAxialStops(x0, y0, x1, y1, pos, cols, 1f);
+    }
+
+    /** 不透明度 a (0〜1、全体で一定) を付けて塗る。 */
+    public void fillAxialStops(double x0, double y0, double x1, double y1, double[] pos, Color[] cols, float a) throws IOException {
         if (cols.length == 0) return;
         org.apache.pdfbox.pdmodel.graphics.shading.PDShadingType2 sh =
                 new org.apache.pdfbox.pdmodel.graphics.shading.PDShadingType2(new org.apache.pdfbox.cos.COSDictionary());
@@ -181,7 +207,7 @@ public final class PdfCanvas implements AutoCloseable {
         ext.add(org.apache.pdfbox.cos.COSBoolean.TRUE);
         ext.add(org.apache.pdfbox.cos.COSBoolean.TRUE);
         sh.setExtend(ext);
-        alpha(1, 1);
+        alpha(a, a);
         cs.shadingFill(sh);
     }
 
@@ -190,6 +216,11 @@ public final class PdfCanvas implements AutoCloseable {
      * 円の外は最後の色、内は最初の色のまま延ばす。
      */
     public void fillRadialStops(double fx, double fy, double cx, double cy, double r, double[] pos, Color[] cols) throws IOException {
+        fillRadialStops(fx, fy, cx, cy, r, pos, cols, 1f);
+    }
+
+    /** 不透明度 a (0〜1、全体で一定) を付けて塗る。 */
+    public void fillRadialStops(double fx, double fy, double cx, double cy, double r, double[] pos, Color[] cols, float a) throws IOException {
         if (cols.length == 0 || !(r > 0)) return;
         org.apache.pdfbox.pdmodel.graphics.shading.PDShadingType3 sh =
                 new org.apache.pdfbox.pdmodel.graphics.shading.PDShadingType3(new org.apache.pdfbox.cos.COSDictionary());
@@ -201,7 +232,7 @@ public final class PdfCanvas implements AutoCloseable {
         ext.add(org.apache.pdfbox.cos.COSBoolean.TRUE);
         ext.add(org.apache.pdfbox.cos.COSBoolean.TRUE);
         sh.setExtend(ext);
-        alpha(1, 1);
+        alpha(a, a);
         cs.shadingFill(sh);
     }
 
@@ -277,6 +308,7 @@ public final class PdfCanvas implements AutoCloseable {
 
     private void fillTile(double x, double y, double w, double h, long bits, Color fg, Color bg) throws IOException {
         cs.saveGraphicsState();
+        alpha(1, 1);   // 直前の半透明の塗りの透明度を受け継がない
         cs.setNonStrokingColor(pattern(bits, fg, bg, 0.12, 0, 0));
         cs.addRect((float) x, (float) y, (float) w, (float) h);
         cs.fill();
@@ -293,6 +325,7 @@ public final class PdfCanvas implements AutoCloseable {
     public void fillPattern(Shape s, long bits, Color fg, Color bg, double cell, double ox, double oy) throws IOException {
         if (fg == null || bg == null) return;
         cs.saveGraphicsState();
+        alpha(1, 1);
         cs.setNonStrokingColor(pattern(bits, rgb(fg), rgb(bg), cell, ox, oy));
         path(s);
         if (windingEvenOdd(s)) cs.fillEvenOdd(); else cs.fill();

@@ -158,8 +158,11 @@ public final class ValueFormatter {
             }
             case NUMERIC -> {
                 double v = cell.getNumericCellValue();
-                // 表示形式「@」の数値は文字列と同じ扱い (標準の配置で左寄せ)
-                r.number = fmt == null || !fmt.trim().equals("@");
+                // 表示形式「@」の数値は文字列と同じ扱い (標準の配置で左寄せ)。
+                // @ を含む区画が 1 つだけの書式 (@"円"・"No."@ など) も同じく、Excel は付けた文字を出さず「標準」の形で左寄せにする
+                boolean text = fmt != null && (fmt.trim().equals("@") || textOnly(fmt));
+                r.number = !text;
+                if (text) fmt = "@";
                 r.value = v;
                 if (v == 0 && !showZeros) { r.text = ""; return r; }
                 formatNumber(r, v, fmt);
@@ -218,7 +221,7 @@ public final class ValueFormatter {
     /** 数値を書式化して結果に設定する。 */
     private void formatNumber(Result r, double v, String fmt) {
         // 文字列の表示形式「@」の数値 (形式を後から付けたセル) は、Excel は標準の形で表示する
-        if (fmt == null || fmt.isEmpty() || fmt.trim().equals("@") || ExcelFormat.isGeneral(fmt) && sections(fmt).size() == 1
+        if (fmt == null || fmt.isEmpty() || fmt.trim().equals("@") || textOnly(fmt) || ExcelFormat.isGeneral(fmt) && sections(fmt).size() == 1
                 && fmt.trim().equalsIgnoreCase("General")) {
             r.general = true;
             r.text = general(v, 11);
@@ -226,7 +229,9 @@ public final class ValueFormatter {
         }
         ExcelFormat.Out o = excel.format(v, fmt);
         r.color = o.color;
-        if (ExcelFormat.isGeneral(fmt)) r.general = true;
+        // 「標準」の扱いは、値に使う区画が先頭の General のときだけ (General;[Red](#,##0) の負の値は 2 番目の区画)
+        int ns = sections(fmt).size();
+        if (ExcelFormat.isGeneral(fmt) && (ns == 1 || v > 0 || v == 0 && ns < 3)) r.general = true;
         int f = o.text.indexOf(ExcelFormat.FILL);
         if (f >= 0) {
             r.fillChar = String.valueOf(o.fill == null ? ' ' : o.fill);
@@ -239,6 +244,11 @@ public final class ValueFormatter {
     }
 
     /** 表示形式をセクション (; 区切り。引用符・角括弧・エスケープの中は区切らない) に分ける。 */
+    /** 区画が 1 つで、引用符の外に @ がある書式か (「@」だけの書式を除く)。 */
+    static boolean textOnly(String fmt) {
+        return fmt != null && !fmt.trim().equals("@") && sections(fmt).size() == 1 && ExcelFormat.containsUnquoted(fmt, '@');
+    }
+
     static List<String> sections(String fmt) {
         List<String> out = new ArrayList<>();
         StringBuilder cur = new StringBuilder();

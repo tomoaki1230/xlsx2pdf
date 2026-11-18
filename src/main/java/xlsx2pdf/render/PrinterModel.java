@@ -270,7 +270,8 @@ public final class PrinterModel {
 
     /** 正規化したフォント名 ({@link FontManager#norm}) が ＭＳ ゴシック/明朝系か。 */
     static boolean isMs(String norm) {
-        return norm.startsWith("ms ") || norm.startsWith("ms") && (norm.contains("ゴシック") || norm.contains("明朝")
+        // ＭＳ ゴシック・明朝の仲間だけ (MS Sans Serif・MS Shell Dlg などは含めない)
+        return norm.startsWith("ms") && (norm.contains("ゴシック") || norm.contains("明朝")
                 || norm.contains("gothic") || norm.contains("mincho"));
     }
 

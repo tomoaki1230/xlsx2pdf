@@ -354,8 +354,11 @@ public final class ShapeText {
             boolean cjk = r.text.codePoints().anyMatch(FontManager::isCjk);
             // Excel の図形の行: 和文の書体は 1.3 倍、欧文の書体は hhea + lineGap。欧文の書体の中の和文の文字は代わりの和文の書体の行
             boolean fb = cjk && !r.spec.eaFont;
-            a = Math.max(a, (fb ? Math.max(FontManager.EA_FALLBACK_ASC, r.spec.lineAsc) : r.spec.lineAsc) * r.size);
-            d = Math.max(d, (fb ? Math.max(FontManager.EA_FALLBACK_DESC, r.spec.lineDesc) : r.spec.lineDesc) * r.size);
+            // 和文の書体を指定したラン (a:ea) の和文の文字は、その書体の行の高さ
+            float ea = cjk && r.spec.eaLineAsc > 0 ? r.spec.eaLineAsc : FontManager.EA_FALLBACK_ASC;
+            float ed = cjk && r.spec.eaLineAsc > 0 ? r.spec.eaLineDesc : FontManager.EA_FALLBACK_DESC;
+            a = Math.max(a, (fb ? Math.max(ea, r.spec.lineAsc) : r.spec.lineAsc) * r.size);
+            d = Math.max(d, (fb ? Math.max(ed, r.spec.lineDesc) : r.spec.lineDesc) * r.size);
             any = true;
         }
         if (any) { l.ascent = a; l.descent = d; }

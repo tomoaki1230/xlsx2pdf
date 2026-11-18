@@ -95,17 +95,16 @@ public final class DrawingPainter {
         an.frame = ob != null && "graphicFrame".equals(ob.getLocalName());
         Element from = Xml.child(a, "from"), to = Xml.child(a, "to");
         if (from != null) {
-            an.c0 = (int) Xml.longAttr(Xml.child(from, "col"), "_", 0);
-            an.c0 = Integer.parseInt(Xml.text(Xml.child(from, "col")).trim());
-            an.c0Off = Long.parseLong(Xml.text(Xml.child(from, "colOff")).trim());
-            an.r0 = Integer.parseInt(Xml.text(Xml.child(from, "row")).trim());
-            an.r0Off = Long.parseLong(Xml.text(Xml.child(from, "rowOff")).trim());
+            an.c0 = (int) anchorNum(from, "col");
+            an.c0Off = anchorNum(from, "colOff");
+            an.r0 = (int) anchorNum(from, "row");
+            an.r0Off = anchorNum(from, "rowOff");
         }
         if (to != null) {
-            an.c1 = Integer.parseInt(Xml.text(Xml.child(to, "col")).trim());
-            an.c1Off = Long.parseLong(Xml.text(Xml.child(to, "colOff")).trim());
-            an.r1 = Integer.parseInt(Xml.text(Xml.child(to, "row")).trim());
-            an.r1Off = Long.parseLong(Xml.text(Xml.child(to, "rowOff")).trim());
+            an.c1 = (int) anchorNum(to, "col");
+            an.c1Off = anchorNum(to, "colOff");
+            an.r1 = (int) anchorNum(to, "row");
+            an.r1Off = anchorNum(to, "rowOff");
         }
         Element pos = Xml.child(a, "pos"), ext = Xml.child(a, "ext");
         if (pos != null) { an.x = Xml.longAttr(pos, "x", 0); an.y = Xml.longAttr(pos, "y", 0); }
@@ -274,6 +273,15 @@ public final class DrawingPainter {
      */
     /** 右から左のシート (本体を左右反転して描く)。 */
     public boolean rtl;
+    /** アンカーの位置の数 (col・row・colOff・rowOff)。空や数でなければ 0 (非 Excel のファイルで、シート全体を止めない)。 */
+    private static long anchorNum(Element parent, String name) {
+        try {
+            return Long.parseLong(Xml.text(Xml.child(parent, name)).trim());
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+
     /** 白黒印刷 (pageSetup の blackAndWhite): 図形の塗りは白、線と文字は黒、グラフの系列は黒・白・灰色の順。 */
     public boolean bw;
 
@@ -285,10 +293,14 @@ public final class DrawingPainter {
             judging = true;
             Rectangle2D r0 = rect(an);
             judging = false;
-            if (!r0.intersects(view) && !(r0.getWidth() == 0 || r0.getHeight() == 0)) continue;
+            // 幅か高さが 0 の図形 (水平・垂直の線) も、範囲が重なるブロックだけで描く
+            boolean flat = r0.getWidth() == 0 || r0.getHeight() == 0;
+            if (flat ? r0.getMaxX() < view.getX() || r0.getX() > view.getMaxX() || r0.getMaxY() < view.getY() || r0.getY() > view.getMaxY()
+                     : !r0.intersects(view)) continue;
             Rectangle2D r = rect(an);
             Element obj = objectOf(a);
             ctx.checkDeadline();
+            int depth = cv.depth();
             try {
                 if (rtl) {
                     // 右から左のシート: 位置は左右反転したまま、中身の反転を打ち消す
@@ -300,13 +312,15 @@ public final class DrawingPainter {
                 } finally {
                     if (rtl) cv.restore();
                 }
-            } catch (RuntimeException e) {
-                // 対応していないオブジェクトでページの描画を止めない
+            } catch (IOException | RuntimeException | StackOverflowError e) {
+                // 対応していないオブジェクト (深すぎる入れ子を含む) でページの描画を止めない。途中のクリップ・変換も戻す
+                cv.restoreTo(depth);
                 Warnings.add("図形を描けませんでした", e);
             }
         }
         for (VmlControls.Control c : controls) {
             if (!c.print) continue;
+            int depth = cv.depth();
             try {
                 if (rtl) {
                     Rectangle2D cr = c.rect(L);
@@ -318,7 +332,9 @@ public final class DrawingPainter {
                 } finally {
                     if (rtl) cv.restore();
                 }
-            } catch (RuntimeException e) {
+            } catch (IOException | RuntimeException | StackOverflowError e) {
+                // 文字の書体の読み込みの失敗 (IOException) も、そのコントロールだけ止める
+                cv.restoreTo(depth);
                 Warnings.add("フォームコントロールを描けませんでした", e);
             }
         }
@@ -329,11 +345,16 @@ public final class DrawingPainter {
         for (Element a : anchors) {
             Element obj = objectOf(a);
             if (obj == null) continue;
-            Anchor an = anchor(a);
-            Rectangle2D r = an.kind.equals("absoluteAnchor") && an.cx > 0
-                    ? new Rectangle2D.Double(x, y, w, h)
-                    : new Rectangle2D.Double(x, y, w, h);
-            paintObject(cv, obj, r, null);
+            // グラフシートのグラフは、アンカーの種類にかかわらず印刷の範囲いっぱいに描く
+            Rectangle2D r = new Rectangle2D.Double(x, y, w, h);
+            ctx.checkDeadline();
+            int depth = cv.depth();
+            try {
+                paintObject(cv, obj, r, null);
+            } catch (IOException | RuntimeException | StackOverflowError e) {
+                cv.restoreTo(depth);
+                Warnings.add("グラフを描けませんでした", e);
+            }
         }
     }
 
@@ -1677,11 +1698,13 @@ public final class DrawingPainter {
     private void paintFrame(PdfCanvas cv, Element gf, Rectangle2D r) throws IOException {
         Element gd = Xml.path(gf, "graphic", "graphicData");
         if (gd == null) return;
+        int depth = cv.depth();
         for (Element c : Xml.children(gd)) {
             if ("timeslicer".equals(c.getLocalName())) {
                 try {
                     new TimelinePainter(ctx, sheet).paint(cv, c.getAttribute("name"), r);
-                } catch (Exception e) {
+                } catch (Exception | StackOverflowError e) {
+                    cv.restoreTo(depth);
                     Warnings.add("タイムラインを描けませんでした", e);
                 }
                 continue;
@@ -1690,7 +1713,8 @@ public final class DrawingPainter {
                 // スライサー: 定義はシートの slicers とブックの slicerCache にある
                 try {
                     new SlicerPainter(ctx, sheet).paint(cv, c.getAttribute("name"), r);
-                } catch (Exception e) {
+                } catch (Exception | StackOverflowError e) {
+                    cv.restoreTo(depth);
                     Warnings.add("スライサーを描けませんでした", e);
                 }
                 continue;
@@ -1709,7 +1733,8 @@ public final class DrawingPainter {
                 } else if ("relIds".equals(c.getLocalName())) {
                     paintDiagram(cv, part, r);
                 }
-            } catch (Exception e) {
+            } catch (Exception | StackOverflowError e) {
+                cv.restoreTo(depth);
                 // 対応していないフレーム
                 Warnings.add("グラフまたは SmartArt を描けませんでした", e);
             }

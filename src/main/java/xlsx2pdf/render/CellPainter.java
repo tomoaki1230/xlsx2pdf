@@ -172,7 +172,7 @@ public final class CellPainter {
     /**
      * 縮小して全体を表示: プリンタ (600 dpi) の ppem を元の大きさから 1 ずつ下げ、文字の幅 (格子に吸着した送り幅) + 縮めた後のフォントの
      * 左右の余白がセルの幅 w に収まる最初の ppem にする。描く大きさは ppem × 0.12pt。複数のランは同じ比で ppem を下げる。
-     * Excel の規則に近いが同じではない (Excel はこれより 1〜3 ppem 小さく選ぶことがある)。
+     * 始める ppem は元の大きさでの比 (floor(元の ppem × (セルの幅 − 元の余白) ÷ 元の文字の幅))。Excel と同じ大きさになるのは約 8 割。
      *
      * @param extraL 左の余白に足す字下げ (pt)
      * @param extraR 右の余白に足す字下げ (pt)
@@ -185,7 +185,17 @@ public final class CellPainter {
         float first = base[0];
         long ppem0 = ppemOf(first, sc);
         double padL = padX() + extraL, padR = padX() + extraR;
-        for (int k = 1; k < 2000; k++) {
+        int k0 = 1;
+        {
+            // Excel は元の大きさでの比で ppem を決める: floor(元の ppem × (セルの幅 − 元の左右の余白) ÷ 元の文字の幅)。
+            // その大きさで (縮めた後の余白を含めて) 収まらなければ、収まるまで 1 ずつ下げる
+            double tw0 = totalWidth(runs);
+            if (tw0 > 0) {
+                long pr = (long) Math.floor(ppem0 * (w - padL - padR) / tw0 + 1e-9);
+                k0 = (int) Math.max(1, ppem0 - pr);
+            }
+        }
+        for (int k = k0; k < 2000; k++) {
             long p0 = ppem0 - k;
             if (p0 < 1) break;
             double ratio = (double) p0 / ppem0;
@@ -320,7 +330,7 @@ public final class CellPainter {
                     if (!(cl.getCellStyle() instanceof XSSFCellStyle cst)) continue;
                     double sl = slantAngle(cst);
                     int cc = cl.getColumnIndex();
-                    if (sl <= 0 || L.mergedAt(r, cc) != null || isEmpty((XSSFCell) cl)) continue;
+                    if (sl <= 0 || L.cw(cc) <= 0 || L.mergedAt(r, cc) != null || isEmpty((XSSFCell) cl)) continue;
                     rangeLast = cc;
                     try {
                         paintCellText(null, new Paginator.Segment(r, r, cc, limit, 0, 0, true), (XSSFCell) cl, null);
@@ -417,9 +427,11 @@ public final class CellPainter {
             CellRangeAddress m = L.mergedAt(r, c);
             double x = L.x(c), y = L.y(r);
             if (m != null) { x = L.x(m.getFirstColumn()); y = L.y(m.getFirstRow()); w = L.x(m.getLastColumn() + 1) - x; h = L.y(m.getLastRow() + 1) - y; }
+            int depth = cv.depth();
             try {
                 sparklines.paint(cv, r, c, x, y, w, h);
             } catch (RuntimeException e) {
+                cv.restoreTo(depth);
                 Warnings.add("スパークラインを描けませんでした", e);
             }
         }
@@ -459,7 +471,10 @@ public final class CellPainter {
                     continue;
                 }
                 if (fill == null && st != null) {
-                    if (paintGradient(cv, st, x, y, w, h)) continue;
+                    if (paintGradient(cv, st, x, y, w, h)) {
+                        if (cfr != null && cfr.bar != null) paintDataBar(cv, cfr, x, y, w, h);
+                        continue;
+                    }
                     if (paintPattern(cv, st, x, y, w, h)) {
                         if (cfr != null && cfr.bar != null) paintDataBar(cv, cfr, x, y, w, h);
                         continue;
@@ -470,11 +485,15 @@ public final class CellPainter {
                     TableStyles.Look lk = tables.look(rr, cc);
                     if (lk != null) fill = lk.fill;
                 }
-                if (fill != null) cv.fillRect(x, y, w, h, fill);
+                // Excel は塗りの矩形を右と下に 1 画素 (600 dpi で 0.12pt) 広く塗る (次のセルの塗りに 1 画素重なる)
+                if (fill != null) cv.fillRect(x, y, w + FILL_OVER / L.scale, h + FILL_OVER / L.scale, fill);
                 if (cfr != null && cfr.bar != null) paintDataBar(cv, cfr, x, y, w, h);
             }
         }
     }
+
+    /** セルの単色の塗りを右と下に広げる幅 (用紙の pt。600 dpi の 1 画素)。 */
+    static final double FILL_OVER = 0.12;
 
     /** 書式の単色の塗りつぶしの色 (網掛けとなしは null)。 */
     Color fillColor(XSSFCellStyle st) {
@@ -567,50 +586,53 @@ public final class CellPainter {
         boolean path = g.isSetType() && "path".equals(g.getType().toString());
         double deg = g.isSetDegree() ? g.getDegree() : 0;
         cv.save();
-        cv.clipRect(x, y, w, h);
-        if (path) {
-            // 内側の矩形 (left・right・top・bottom の割合。t = 0) からセルの縁 (t = 1) へ広がる同心の矩形。外側から塗る
-            double il = g.isSetLeft() ? g.getLeft() : 0, ir = g.isSetRight() ? g.getRight() : 0;
-            double it = g.isSetTop() ? g.getTop() : 0, ib = g.isSetBottom() ? g.getBottom() : 0;
-            int n = PATH_BANDS;
-            for (int i = n; i >= 1; i--) {
-                double t = i / (double) n;
-                Color c = gradAt(pts, cols, t - 0.5 / n);
-                double l = il * (1 - t), r = ir + (1 - ir) * t, tp = it * (1 - t), bt = ib + (1 - ib) * t;
-                cv.fillRect(x + w * l, y + h * tp, w * (r - l), h * (bt - tp), c);
+        try {
+            cv.clipRect(x, y, w, h);
+            if (path) {
+                // 内側の矩形 (left・right・top・bottom の割合。t = 0) からセルの縁 (t = 1) へ広がる同心の矩形。外側から塗る
+                double il = g.isSetLeft() ? g.getLeft() : 0, ir = g.isSetRight() ? g.getRight() : 0;
+                double it = g.isSetTop() ? g.getTop() : 0, ib = g.isSetBottom() ? g.getBottom() : 0;
+                int n = PATH_BANDS;
+                for (int i = n; i >= 1; i--) {
+                    double t = i / (double) n;
+                    Color c = gradAt(pts, cols, t - 0.5 / n);
+                    double l = il * (1 - t), r = ir + (1 - ir) * t, tp = it * (1 - t), bt = ib + (1 - ib) * t;
+                    cv.fillRect(x + w * l, y + h * tp, w * (r - l), h * (bt - tp), c);
+                }
+            } else if (Math.abs(deg - 90 * Math.round(deg / 90)) < 1e-9) {
+                // 縦・横 (0・90・180・270 度): Excel の印刷と同じく、各チャンネルを 2 段ずつ変える帯を並べる。帯の数は区間ごとに
+                // 最大のチャンネルの差 ÷ 2 (白 → 0070C0 で 128) と終わりの色の 1 本、幅は長さ ÷ 本数
+                int q = (int) Math.floorMod(Math.round(deg / 90), 4);
+                boolean horizontal = q % 2 == 0, reverse = q >= 2;
+                List<Color> bands = new ArrayList<>();
+                for (int i = 0; i + 1 < cols.size(); i++) {
+                    Color a = cols.get(i), b = cols.get(i + 1);
+                    int diff = Math.max(Math.abs(a.getRed() - b.getRed()), Math.max(Math.abs(a.getGreen() - b.getGreen()), Math.abs(a.getBlue() - b.getBlue())));
+                    double segLen = pts.get(i + 1)[0] - pts.get(i)[0];
+                    int n = Math.max(1, (int) Math.ceil(diff / 2.0));
+                    if (segLen <= 0) continue;
+                    for (int k = 0; k < n; k++) bands.add(lerp(a, b, k / (double) n));
+                }
+                // 最初の位置より前・最後の位置より後は端の色
+                double p0 = pts.get(0)[0], p1 = pts.get(pts.size() - 1)[0];
+                bands.add(cols.get(cols.size() - 1));
+                double len = horizontal ? w : h;
+                int nb = bands.size();
+                double a0 = len * p0, a1 = len * p1, step = (a1 - a0) / Math.max(1, nb);
+                if (a0 > 0) bandRect(cv, x, y, w, h, horizontal, reverse, 0, a0, len, cols.get(0));
+                for (int k = 0; k < nb; k++) bandRect(cv, x, y, w, h, horizontal, reverse, a0 + k * step, a0 + (k + 1) * step, len, bands.get(k));
+                if (a1 < len) bandRect(cv, x, y, w, h, horizontal, reverse, a1, len, len, cols.get(cols.size() - 1));
+            } else {
+                // 直線: セルを単位の正方形とみなした角度 (0 は左→右、90 は上→下) の方向に変わる。PDF のグラデーションで塗る
+                double rad = Math.toRadians(deg), cs = Math.cos(rad), sn = Math.sin(rad), d = Math.abs(cs) + Math.abs(sn);
+                cv.transform(new java.awt.geom.AffineTransform(w, 0, 0, h, x, y));
+                double[] pos = new double[pts.size()];
+                for (int i = 0; i < pos.length; i++) pos[i] = pts.get(i)[0];
+                cv.fillAxialStops(0.5 - cs * d / 2, 0.5 - sn * d / 2, 0.5 + cs * d / 2, 0.5 + sn * d / 2, pos, cols.toArray(new Color[0]));
             }
-        } else if (Math.abs(deg - 90 * Math.round(deg / 90)) < 1e-9) {
-            // 縦・横 (0・90・180・270 度): Excel の印刷と同じく、各チャンネルを 2 段ずつ変える帯を並べる。帯の数は区間ごとに
-            // 最大のチャンネルの差 ÷ 2 (白 → 0070C0 で 128) と終わりの色の 1 本、幅は長さ ÷ 本数
-            int q = (int) Math.floorMod(Math.round(deg / 90), 4);
-            boolean horizontal = q % 2 == 0, reverse = q >= 2;
-            List<Color> bands = new ArrayList<>();
-            for (int i = 0; i + 1 < cols.size(); i++) {
-                Color a = cols.get(i), b = cols.get(i + 1);
-                int diff = Math.max(Math.abs(a.getRed() - b.getRed()), Math.max(Math.abs(a.getGreen() - b.getGreen()), Math.abs(a.getBlue() - b.getBlue())));
-                double segLen = pts.get(i + 1)[0] - pts.get(i)[0];
-                int n = Math.max(1, (int) Math.ceil(diff / 2.0));
-                if (segLen <= 0) continue;
-                for (int k = 0; k < n; k++) bands.add(lerp(a, b, k / (double) n));
-            }
-            // 最初の位置より前・最後の位置より後は端の色
-            double p0 = pts.get(0)[0], p1 = pts.get(pts.size() - 1)[0];
-            bands.add(cols.get(cols.size() - 1));
-            double len = horizontal ? w : h;
-            int nb = bands.size();
-            double a0 = len * p0, a1 = len * p1, step = (a1 - a0) / Math.max(1, nb);
-            if (a0 > 0) bandRect(cv, x, y, w, h, horizontal, reverse, 0, a0, len, cols.get(0));
-            for (int k = 0; k < nb; k++) bandRect(cv, x, y, w, h, horizontal, reverse, a0 + k * step, a0 + (k + 1) * step, len, bands.get(k));
-            if (a1 < len) bandRect(cv, x, y, w, h, horizontal, reverse, a1, len, len, cols.get(cols.size() - 1));
-        } else {
-            // 直線: セルを単位の正方形とみなした角度 (0 は左→右、90 は上→下) の方向に変わる。PDF のグラデーションで塗る
-            double rad = Math.toRadians(deg), cs = Math.cos(rad), sn = Math.sin(rad), d = Math.abs(cs) + Math.abs(sn);
-            cv.transform(new java.awt.geom.AffineTransform(w, 0, 0, h, x, y));
-            double[] pos = new double[pts.size()];
-            for (int i = 0; i < pos.length; i++) pos[i] = pts.get(i)[0];
-            cv.fillAxialStops(0.5 - cs * d / 2, 0.5 - sn * d / 2, 0.5 + cs * d / 2, 0.5 + sn * d / 2, pos, cols.toArray(new Color[0]));
+        } finally {
+            cv.restore();
         }
-        cv.restore();
         return true;
     }
 
@@ -956,14 +978,14 @@ public final class CellPainter {
         for (int c = s.c0; c <= s.c1; c++) {
             if (L.cw(c) <= 0) continue;
             int j = c - s.c0;
-            if (s.r0 > 0 && (a == null || s.r0 - 1 < a.getFirstRow())) hz[0][j] = better(hz[0][j], neighbour(s.r0 - 1, c, 2));
+            if (s.r0 > 0 && (a == null || s.r0 - 1 < a.getFirstRow())) hz[0][j] = better(neighbour(s.r0 - 1, c, 2), hz[0][j]);   // 同じ太さなら下 (ブロックの中) のセル
             if (a == null || s.r1 + 1 > a.getLastRow()) hz[nr][j] = better(hz[nr][j], neighbour(s.r1 + 1, c, 0));
         }
         for (int r = s.r0; r <= s.r1; r++) {
             ctx.checkDeadline();
             if (L.rh(r) <= 0) continue;
             int i = r - s.r0;
-            if (s.c0 > 0 && (a == null || s.c0 - 1 < a.getFirstColumn())) vt[i][0] = better(vt[i][0], neighbour(r, s.c0 - 1, 1));
+            if (s.c0 > 0 && (a == null || s.c0 - 1 < a.getFirstColumn())) vt[i][0] = better(neighbour(r, s.c0 - 1, 1), vt[i][0]);   // 同じ太さなら右 (ブロックの中) のセル
             if (a == null || s.c1 + 1 > a.getLastColumn()) vt[i][nc] = better(vt[i][nc], neighbour(r, s.c1 + 1, 3));
         }
         // 「選択範囲内で中央」でつながった範囲 (文字のあるセルと、それに続く同じ配置の空のセル) は、結合セルと同様に
@@ -1008,15 +1030,19 @@ public final class CellPainter {
             }
         }
         // 斜めの線 (対角線と、斜めの文字のセルの平行四辺形) は、ページの本体の左右の範囲で切る
-        if (!diagonals.isEmpty() && cv != null) {
+        boolean clipDiag = !diagonals.isEmpty() && cv != null;
+        if (clipDiag) {
             cv.save();
             cv.clipRect(L.x(s.c0), L.y(s.r0) - 10000, L.x(s.c1 + 1) - L.x(s.c0), 20000 + L.y(s.r1 + 1) - L.y(s.r0));
         }
-        for (int d = 0; d < diagonals.size(); d++) {
-            double[] p = diagonals.get(d);
-            drawEdge(cv, diagEdges.get(d), p[0], p[1], p[2], p[3], false, null, 0, 0, 0, 0);
+        try {
+            for (int d = 0; d < diagonals.size(); d++) {
+                double[] p = diagonals.get(d);
+                drawEdge(cv, diagEdges.get(d), p[0], p[1], p[2], p[3], false, null, 0, 0, 0, 0);
+            }
+        } finally {
+            if (clipDiag) cv.restore();
         }
-        if (!diagonals.isEmpty() && cv != null) cv.restore();
     }
 
     /**
@@ -1107,6 +1133,9 @@ public final class CellPainter {
         }
         return false;
     }
+
+    /** 収まらない数値の # の個数を決めるとき、余白の内側にはみ出してよい幅 (600 dpi の画素)。 */
+    static final int HASH_OVER_PX = 2;
 
     /**
      * 収まらない数値の # の並び (n 文字)。分数 (? の空白 U+2007 と / を含む表示) は、表示の文字列の分子の前の空白だけを空白のまま残し、
@@ -1321,6 +1350,7 @@ public final class CellPainter {
     }
 
     private void paintTexts0(PdfCanvas cv, Paginator.Segment s) throws IOException {
+        int depth = cv == null ? 0 : cv.depth();   // セルの例外で途中のクリップ・変換が残らないよう、ここまで戻す
         for (int r = s.r0; r <= s.r1; r++) {
             ctx.checkDeadline();
             if (L.rh(r) <= 0) continue;
@@ -1335,6 +1365,7 @@ public final class CellPainter {
                     try {
                         paintCellText(cv, s, cell, m);
                     } catch (RuntimeException e) {
+                        if (cv != null) cv.restoreTo(depth);
                         // 1 つの壊れたセルで変換を止めない
                         Warnings.add("セル " + cell.getReference() + " の文字を描けませんでした", e);
                     }
@@ -1346,6 +1377,7 @@ public final class CellPainter {
                 try {
                     paintCellText(cv, s, cell, null);
                 } catch (RuntimeException e) {
+                    if (cv != null) cv.restoreTo(depth);
                     // 1 つの壊れたセルで変換を止めない
                     Warnings.add("セル " + cell.getReference() + " の文字を描けませんでした", e);
                 }
@@ -1363,6 +1395,7 @@ public final class CellPainter {
                         try {
                             paintCellText(cv, s, xc, null);
                         } catch (RuntimeException e) {
+                            if (cv != null) cv.restoreTo(depth);
                             Warnings.add("セル " + xc.getReference() + " の文字を描けませんでした", e);
                         }
                     }
@@ -1381,6 +1414,7 @@ public final class CellPainter {
                         try {
                             paintCellText(cv, s, xc, null);
                         } catch (RuntimeException e) {
+                            if (cv != null) cv.restoreTo(depth);
                             Warnings.add("セル " + xc.getReference() + " の文字を描けませんでした", e);
                         }
                     }
@@ -1396,6 +1430,7 @@ public final class CellPainter {
                     try {
                         paintCellText(cv, s, row.getCell(k), null);
                     } catch (RuntimeException e) {
+                        if (cv != null) cv.restoreTo(depth);
                         // 1 つの壊れたセルで変換を止めない
                         Warnings.add("セル " + row.getCell(k).getReference() + " の文字を描けませんでした", e);
                     }
@@ -1504,7 +1539,10 @@ public final class CellPainter {
         } else {
             vr = ctx.formatter.format(cell, ps.showZeros, ps.errors, cfr != null ? cfr.numFmt : null);
         }
-        if (vr.text.isEmpty()) return;
+        // 表示形式で文字が空になるセル (;;; など) も、アイコンセットのアイコンは描く (Excel の「アイコンだけ」の作り方)
+        boolean emptyIcon = vr.text.isEmpty() && cfr != null && cfr.icon != null && !bw() && cv != null;
+        if (vr.text.isEmpty() && !emptyIcon) return;
+        if (emptyIcon) vr.text = "0";
         if (cfr != null && cfr.hideText) return;
         XSSFFont font = st.getFont();
         padFont = font;
@@ -1529,12 +1567,14 @@ public final class CellPainter {
             iconSize = size;
             x0 += off + size;
             w = Math.max(0, w - off - size);
-            suppressText = icon.iconOnly();
+            suppressText = icon.iconOnly() || emptyIcon;
         }
 
         Align al = align(st);
-        if (cell.getCTCell().isSetVm() && paintCellImage(cv, cell, al, x0, y0, w, h)) return;
+        // はみ出しを調べる段階 (cv が null、または measuringOverflow) では画像・チェックボックスを描かない (はみ出さず、2 回描かない)
+        if (cell.getCTCell().isSetVm() && (cv == null || measuringOverflow || paintCellImage(cv, cell, al, x0, y0, w, h))) return;
         if (vr.bool && isCheckboxCell(st)) {
+            if (cv == null || measuringOverflow) return;
             paintCellCheckbox(cv, cell, font, al, x0, y0, w, h);
             return;
         }
@@ -1614,10 +1654,13 @@ public final class CellPainter {
                     }
                 }
                 if (fitted == null) {
+                    // Excel は # をセルの配置によらず中央揃えで置き、個数は左右の余白に合わせて 2 画素はみ出してよい
                     float hw = runs.get(0).spec.width("#", runs.get(0).size, ctx.fonts);
-                    int n = hw > 0 ? (int) Math.floor(availW / hw) : 0;
+                    // セルが # 1 つより狭くても、Excel は # を 1 つ描く
+                    int n = hw > 0 ? Math.max(1, (int) Math.floor((availW + HASH_OVER_PX * 0.12 / Math.max(0.1, L.scale) + 1e-6) / hw)) : 0;
                     fitted = n > 0 ? fractionHashes(vr.text, n) : "";
                     vr.fillChar = null;
+                    ha = HorizontalAlignment.CENTER;
                 }
                 TextLayout.Run base = runs.get(0);
                 runs = new ArrayList<>(List.of(base.copy(fitted)));
@@ -1692,13 +1735,19 @@ public final class CellPainter {
         float sizeScale = 1;
         if (vertical && shrink) {
             // 縦書きは、積んだ高さをセルの高さに収める
+            // 改行で分かれた列ごとに積んだ高さを求め、いちばん高い列を収める
             int n = 0;
-            double need = 0;
+            double need = 0, col = 0;
             for (TextLayout.Run rr : runs) {
-                int k = (int) rr.text.codePoints().filter(cp -> cp != '\n' && cp != '\r').count();
-                n += k;
-                need += k * stackPitch(rr);
+                double pitch = stackPitch(rr);
+                for (int cp : rr.text.codePoints().toArray()) {
+                    if (cp == '\r') continue;
+                    if (cp == '\n') { need = Math.max(need, col); col = 0; continue; }
+                    n++;
+                    col += pitch;
+                }
             }
+            need = Math.max(need, col);
             double avail = h - padTop() - padBottom();
             if (n > 0 && need > avail) sizeScale = (float) (avail / need);
         } else if (shrink && textW > availW && textW > 0) {
@@ -1708,10 +1757,11 @@ public final class CellPainter {
             availW = Math.max(0, w - padL - padR);
         }
         if (sizeScale < 1) {
-            for (TextLayout.Run rr : runs) rr.size *= sizeScale;
+            // 横書きの縮小と同じく 1 ppem (600 dpi の 1 画素) より小さくしない (余白より低いセルで倍率が 0 以下にならないように)
+            float min = (float) (0.12 / Math.max(0.1, L.scale));
+            for (TextLayout.Run rr : runs) rr.size = Math.max(min, rr.size * sizeScale);
         }
 
-        cv.save();
         // 結合セルが改ページをまたぐと、文字はそのブロックの範囲で切り抜かれる
         double clipT = y0, clipB = y0 + h;
         if (posx() && s != null) {
@@ -1725,13 +1775,14 @@ public final class CellPainter {
             clipL = Math.min(clipL, x0 + Math.min(0, sh));
             clipR = Math.max(clipR, x0 + w + Math.max(0, sh));
         }
-        cv.clipRect(clipL, clipT, clipR - clipL, Math.max(0, clipB - clipT));
+        cv.save();
         try {
+        cv.clipRect(clipL, clipT, clipR - clipL, Math.max(0, clipB - clipT));
         if (vertical) {
-            paintStacked(cv, runs, x0, y0, w, h, ha, va, indentPt, wrap);
+            if (!suppressText) paintStacked(cv, runs, x0, y0, w, h, ha, va, indentPt, wrap);   // アイコンだけのときは文字を描かない
         } else if (angle != 0) {
             slantBox = m == null && st != null && hasAnyBorder(st);
-            paintRotated(cv, runs, x0, y0, w, h, ha, va, angle, padL, padR);
+            if (!suppressText) paintRotated(cv, runs, x0, y0, w, h, ha, va, angle, padL, padR);
         } else if (vr.fillChar != null && vr.fillLeft != null) {
             paintAccounting(cv, runs.get(0), vr, x0 + padL, y0, availW, h, va);
         } else if (ha == HorizontalAlignment.FILL) {
@@ -1758,11 +1809,22 @@ public final class CellPainter {
                 phon = null;
             }
         }
+            // 縦書き・斜めの文字の経路はアイコンを描かないので、ここで描く (最初のランの基線をセルの縦位置で決める)
+            if (pendingIcon != null) {
+                TextLayout.Run r0 = runs.get(0);
+                double asc = r0.spec.ascent * r0.size, desc = r0.spec.descent * r0.size;
+                double baseline = switch (va) {
+                    case TOP -> y0 + padTop() + asc;
+                    case CENTER -> y0 + (h - asc - desc) / 2 + asc + centerDy();
+                    default -> y0 + h - padBottom() - desc;
+                };
+                paintPendingIcon(cv, baseline, r0.size);
+            }
         } finally {
             pendingIcon = null;
             suppressText = false;
+            cv.restore();
         }
-        cv.restore();
     }
 
     /** アイコンの左の余白 (アイコンの大きさに対する割合。Excel の印刷: 12pt のアイコンで 1.56pt)。 */
@@ -2333,9 +2395,12 @@ public final class CellPainter {
         var img = Images.toPdf(ctx, "cellimage:" + ci.name(vm), data, ci.name(vm), iw, ih);
         if (img == null) return false;
         cv.save();
-        cv.clipRect(cx0 - IMG_SHIFT, cy0 - IMG_SHIFT, cw, ch);
-        cv.image(img, x, y, iw, ih, 1f);
-        cv.restore();
+        try {
+            cv.clipRect(cx0 - IMG_SHIFT, cy0 - IMG_SHIFT, cw, ch);
+            cv.image(img, x, y, iw, ih, 1f);
+        } finally {
+            cv.restore();
+        }
         return true;
     }
 
@@ -2425,7 +2490,7 @@ public final class CellPainter {
             default -> y0 + h - padBottom() - total;
         };
         double gap = 0;
-        if ((va == VerticalAlignment.DISTRIBUTED || va == VerticalAlignment.JUSTIFY) && cps.size() > 1 && total < h) {
+        if ((va == VerticalAlignment.DISTRIBUTED || va == VerticalAlignment.JUSTIFY) && cps.size() > 1 && total < h - padTop() - padBottom()) {
             // 縦位置が均等割り付けのときは、字下げの幅を上下の余白にする
             double ind = va == VerticalAlignment.DISTRIBUTED ? Math.min(indentPt, Math.max(0, (h - total) / 2)) : 0;
             top = y0 + padTop() + ind;
@@ -2520,21 +2585,24 @@ public final class CellPainter {
             default -> y0 + h - padBottom() - bh / 2;
         };
         cv.save();
-        java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(cx, cy);
-        at.rotate(-a); // Excel の正の角度は反時計回り
-        cv.transform(at);
-        double yy = -th / 2;
-        for (TextLayout.Line li : lines) {
-            // 行の揃えは、まとまりの中で横の配置に合わせる
-            double lx = switch (ha) {
-                case LEFT -> -tw / 2;
-                case RIGHT -> tw / 2 - li.width;
-                default -> -li.width / 2;
-            };
-            TextLayout.drawLine(cv, li, lx, yy + li.ascent, 0, 0);
-            yy += pitch(li);
+        try {
+            java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(cx, cy);
+            at.rotate(-a); // Excel の正の角度は反時計回り
+            cv.transform(at);
+            double yy = -th / 2;
+            for (TextLayout.Line li : lines) {
+                // 行の揃えは、まとまりの中で横の配置に合わせる
+                double lx = switch (ha) {
+                    case LEFT -> -tw / 2;
+                    case RIGHT -> tw / 2 - li.width;
+                    default -> -li.width / 2;
+                };
+                TextLayout.drawLine(cv, li, lx, yy + li.ascent, 0, 0);
+                yy += pitch(li);
+            }
+        } finally {
+            cv.restore();
         }
-        cv.restore();
     }
 
     /**
@@ -2583,11 +2651,14 @@ public final class CellPainter {
                 y = top ? yt : bottom ? yb : (yb + yt) / 2;
             }
             cv.save();
-            java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(x, y);
-            at.rotate(up ? -Math.PI / 2 : Math.PI / 2);
-            cv.transform(at);
-            TextLayout.drawLine(cv, li, 0, 0, 0, 0);
-            cv.restore();
+            try {
+                java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(x, y);
+                at.rotate(up ? -Math.PI / 2 : Math.PI / 2);
+                cv.transform(at);
+                TextLayout.drawLine(cv, li, 0, 0, 0, 0);
+            } finally {
+                cv.restore();
+            }
         }
     }
 
@@ -2651,11 +2722,14 @@ public final class CellPainter {
             maxX = Math.max(maxX, ox + li.width * cs + li.descent * sn);
             if (cv == null) continue; // 測るだけ
             cv.save();
-            java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(ox, oy);
-            at.rotate(-Math.toRadians(angleDeg));
-            cv.transform(at);
-            TextLayout.drawLine(cv, li, 0, 0, 0, 0);
-            cv.restore();
+            try {
+                java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(ox, oy);
+                at.rotate(-Math.toRadians(angleDeg));
+                cv.transform(at);
+                TextLayout.drawLine(cv, li, 0, 0, 0, 0);
+            } finally {
+                cv.restore();
+            }
         }
         return maxX;
     }
@@ -2692,11 +2766,14 @@ public final class CellPainter {
                 * (lines.get(0).ascent + lines.get(0).descent) / YU11_AD * 11 * ROT_ASC_EXTRA * Math.abs(ca);
         for (int i = 0; i < n; i++) {
             cv.save();
-            java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(ox[i] + dx, dy);
-            at.rotate(-a);
-            cv.transform(at);
-            TextLayout.drawLine(cv, lines.get(i), 0, 0, 0, 0);
-            cv.restore();
+            try {
+                java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(ox[i] + dx, dy);
+                at.rotate(-a);
+                cv.transform(at);
+                TextLayout.drawLine(cv, lines.get(i), 0, 0, 0, 0);
+            } finally {
+                cv.restore();
+            }
         }
     }
 

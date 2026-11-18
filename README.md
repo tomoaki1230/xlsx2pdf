@@ -33,7 +33,7 @@ Excel も LibreOffice も要りません。Java だけで動きます（Apache P
 
 ## バージョン
 
-0.1.0
+0.1.1
 
 ## 動作環境
 
@@ -335,6 +335,7 @@ opt.timeoutSeconds = 60;            // --timeout
 // opt.noEdit = true;               // --no-edit
 // opt.fontCacheDir = new File("/var/cache/xlsx2pdf"); // --font-cache-dir
 // opt.noFontCache = true;          // --no-font-cache
+// opt.useFileDpi = true;           // --use-file-dpi
 // opt.noLimits();                  // --no-limits
 
 try {

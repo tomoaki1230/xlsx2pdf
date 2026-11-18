@@ -58,8 +58,6 @@ public final class PrintSetup {
     public String comments = "none";
     /** レイアウトに使う解像度 (dpi)。 */
     public int hdpi = 600, vdpi = 600;
-    /** ファイルの pageSetup の horizontalDpi/verticalDpi を使う (既定は常に 600 dpi)。 */
-    public static boolean useFileDpi = false;
 
     private static final double MM = 72 / 25.4;
     /**
@@ -121,6 +119,14 @@ public final class PrintSetup {
      *                   0 なら既定
      */
     public static PrintSetup read(XSSFWorkbook wb, XSSFSheet sheet, int sheetIndex, int defaultPaper, int printerDpi) {
+        return read(wb, sheet, sheetIndex, defaultPaper, printerDpi, false);
+    }
+
+    /**
+     * @param useFileDpi ファイルの pageSetup の horizontalDpi/verticalDpi を使う (--use-file-dpi。既定は常に 600 dpi)。
+     *                   変換ごとの設定 (同時に変換しても互いに影響しない)
+     */
+    public static PrintSetup read(XSSFWorkbook wb, XSSFSheet sheet, int sheetIndex, int defaultPaper, int printerDpi, boolean useFileDpi) {
         PrintSetup p = new PrintSetup();
         CTWorksheet ws = sheet.getCTWorksheet();
         CTPageSetup ps = ws.isSetPageSetup() ? ws.getPageSetup() : null;
@@ -133,8 +139,9 @@ public final class PrintSetup {
             if (ps.isSetFitToWidth()) p.fitW = (int) ps.getFitToWidth();
             if (ps.isSetFitToHeight()) p.fitH = (int) ps.getFitToHeight();
             if (ps.isSetPageOrder()) p.overThenDown = "overThenDown".equals(ps.getPageOrder().toString());
-            if (ps.isSetUseFirstPageNumber() && ps.getUseFirstPageNumber() && ps.isSetFirstPageNumber())
-                p.firstPageNumber = (int) ps.getFirstPageNumber();
+            // firstPageNumber が無ければ既定の 1 (Excel も 1 から数え直す)
+            if (ps.isSetUseFirstPageNumber() && ps.getUseFirstPageNumber())
+                p.firstPageNumber = ps.isSetFirstPageNumber() ? (int) ps.getFirstPageNumber() : 1;
             if (ps.isSetErrors()) p.errors = ps.getErrors().toString();
             if (ps.isSetBlackAndWhite()) p.blackAndWhite = ps.getBlackAndWhite();
             if (ps.isSetDraft()) p.draft = ps.getDraft();
@@ -202,7 +209,12 @@ public final class PrintSetup {
                     String[] ab = r.split(":");
                     if (ab.length != 2) continue;
                     if (ab[0].matches("\\d+")) {
-                        p.titleRows = new CellRangeAddress(Integer.parseInt(ab[0]) - 1, Integer.parseInt(ab[1]) - 1, -1, -1);
+                        // 壊れた定義 (桁あふれ・数でない終わり) は印刷タイトルなしにする (変換全体を止めない)
+                        try {
+                            p.titleRows = new CellRangeAddress(Integer.parseInt(ab[0]) - 1, Integer.parseInt(ab[1]) - 1, -1, -1);
+                        } catch (NumberFormatException e) {
+                            continue;
+                        }
                     } else if (ab[0].matches("[A-Za-z]+")) {
                         p.titleCols = new CellRangeAddress(-1, -1, colIndex(ab[0]), colIndex(ab[1]));
                     } else {

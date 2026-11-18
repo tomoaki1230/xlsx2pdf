@@ -228,6 +228,12 @@ public final class HeaderFooter {
         List<TextLayout.Line> ls = TextLayout.layout(runs, 0, false, false, ctx.fonts);
         if (ls.isEmpty()) ls = TextLayout.layout(List.of(mkRun("", new Style(ctx.defaultFontName, null, ctx.defaultFontSize, false, false, false, 0, 0, Color.BLACK), fs)), 0, false, false, ctx.fonts);
         TextLayout.Line l = ls.get(0);
+        if (l.ascent + l.descent == 0 && !runs.isEmpty()) {
+            // 空行の書式だけを持つ空のラン: その書式の高さ
+            TextLayout.Run r = runs.get(0);
+            l.ascent = r.spec.ascent * r.size;
+            l.descent = r.spec.descent * r.size;
+        }
         fillEmpty(l, fs);
         return l;
     }
@@ -367,7 +373,14 @@ public final class HeaderFooter {
                     buf.setLength(0);
                 }
                 if (end) break;
-                if (newline) { lines.add(new ArrayList<>()); i++; continue; }
+                if (newline) {
+                    // 文字のない行は、その時点の書式の行送りで送る (Excel: &9A 改行 改行 B の空行は 9pt の行送り)
+                    List<TextLayout.Run> cur = lines.get(lines.size() - 1);
+                    if (cur.isEmpty()) cur.add(mkRun("", st, fs));
+                    lines.add(new ArrayList<>());
+                    i++;
+                    continue;
+                }
                 char c = text.charAt(i + 1);
                 i += 2;
                 switch (c) {
@@ -389,8 +402,8 @@ public final class HeaderFooter {
                             int j = k + 1;
                             while (j < text.length() && Character.isDigit(text.charAt(j))) j++;
                             if (j > k + 1) {
-                                int d = Integer.parseInt(text.substring(k + 1, j));
-                                base += text.charAt(k) == '+' ? d : -d;
+                                int d = digits(text.substring(k + 1, j));
+                                base = (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, (long) base + (text.charAt(k) == '+' ? d : -(long) d)));
                                 i = j;
                             }
                         }
@@ -454,7 +467,7 @@ public final class HeaderFooter {
                         if (Character.isDigit(c)) {
                             int j = i;
                             while (j < text.length() && Character.isDigit(text.charAt(j))) j++;
-                            size = Integer.parseInt(text.substring(i - 1, j));
+                            size = Math.min(409, digits(text.substring(i - 1, j)));   // Excel の文字の大きさの上限は 409pt
                             i = j;
                         }
                     }
@@ -475,10 +488,16 @@ public final class HeaderFooter {
      */
     private static void flush(List<Section> out, char pos, List<List<TextLayout.Run>> lines, List<String> pics) {
         boolean any = !pics.isEmpty();
-        for (List<TextLayout.Run> l : lines) if (!l.isEmpty()) any = true;
+        for (List<TextLayout.Run> l : lines) if (!blank(l)) any = true;
         if (!any) return;
-        while (lines.size() > 1 && lines.get(lines.size() - 1).isEmpty()) lines.remove(lines.size() - 1);
+        while (lines.size() > 1 && blank(lines.get(lines.size() - 1))) lines.remove(lines.size() - 1);
         out.add(new Section(pos, lines, pics));
+    }
+
+    /** 文字のない行か (空行の書式だけを持つ空のランは文字に数えない)。 */
+    private static boolean blank(List<TextLayout.Run> l) {
+        for (TextLayout.Run r : l) if (!r.text.isEmpty()) return false;
+        return true;
     }
 
     /** 書式を適用したランを作る。 */
@@ -496,5 +515,14 @@ public final class HeaderFooter {
         // 上付き・下付きの大きさとずらし量はセルと同じ (66% を整数に丸め、上 0.497 倍・下 0.198 倍)
         r.cellShift = true;
         return r;
+    }
+
+    /** 数字の並びを整数にする。大きすぎる値は int の上限にする (桁あふれで変換全体を止めない)。 */
+    static int digits(String d) {
+        try {
+            return Integer.parseInt(d);
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
     }
 }

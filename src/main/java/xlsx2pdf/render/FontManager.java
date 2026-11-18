@@ -147,6 +147,8 @@ public final class FontManager {
         public float lineAsc, lineDesc;
         /** 和文の書体か (ひらがなを持つ)。 */
         public boolean eaFont;
+        /** 和文の書体を別に指定したとき (a:ea)、和文の文字の行の上・下 (em)。なければ 0。 */
+        public float eaLineAsc, eaLineDesc;
 
         Spec(Face face, Face eaFace, boolean bold, boolean italic, float ascent, float descent, String requested) {
             this.face = face;
@@ -200,7 +202,8 @@ public final class FontManager {
             if (face.hasGlyph(cp) && !(isCjk(cp) && face != eaFace && eaFace.hasGlyph(cp) && preferEa(face))) return face;
             if (eaFace.hasGlyph(cp)) return eaFace;
             for (Face f : fm.fallbacks()) if (f.hasGlyph(cp)) return f;
-            return face;
+            Face sys = fm.systemFallback(cp);
+            return sys != null ? sys : face;
         }
 
         private static boolean preferEa(Face f) {
@@ -253,6 +256,12 @@ public final class FontManager {
                 long ppem = Math.round(size / g[0]);
                 long half = (ppem + 1) / 2;
                 return (float) (Math.round(adv * 2 * half) * g[0] + extra);
+            }
+            if (g != null) {
+                // GDI の送り幅: 大きさを整数の ppem にしてから、送り幅 × ppem を四捨五入した整数の画素
+                // (8pt の 0.5em は ppem 67 で 33.5 → 34 画素。大きさのまま 66.67 × 0.5 = 33.3 → 33 にしない)
+                double ppem = Math.floor(size / g[0] + 0.5 + 1e-9);
+                return (float) (Math.floor(adv * ppem + 0.5 + 1e-6) * g[0] + extra);
             }
             return (float) (snap(adv * size) + extra);
         }
@@ -880,6 +889,35 @@ public final class FontManager {
         return fallbackFaces;
     }
 
+    /**
+     * 同梱の予備の書体にもない文字 (簡体字・ハングルなど) に使う PC のフォントの候補 (この順に探す)。
+     * Excel (Windows) もセルのフォントにない文字を、中国語・韓国語のフォントなどに切り替えて描く。
+     */
+    private static final List<String> SYSTEM_FALLBACKS = List.of("microsoft jhenghei", "microsoft yahei", "simsun",
+            "malgun gothic", "gulim", "segoe ui symbol", "segoe ui emoji", "noto sans cjk sc", "noto sans cjk tc",
+            "noto sans cjk kr", "noto sans sc", "noto sans tc", "noto sans kr");
+
+    /** 文字ごとの {@link #systemFallback} の結果 (見つからなければ NONE)。 */
+    private final Map<Integer, Face> systemFallbackCache = new HashMap<>();
+    private static final Face NONE_FACE = null;
+
+    /**
+     * 文字を持つ PC のフォントを {@link #SYSTEM_FALLBACKS} の順に探す。フォントは大きいので、その文字が出てきたときだけ読む。
+     * どれにもなければ警告して null を返す。
+     */
+    Face systemFallback(int cp) {
+        if (systemFallbackCache.containsKey(cp)) return systemFallbackCache.get(cp);
+        Face found = NONE_FACE;
+        for (String name : SYSTEM_FALLBACKS) {
+            Face f = loadSystem(name, 0);
+            if (f != null && f.hasGlyph(cp)) { found = f; break; }
+        }
+        systemFallbackCache.put(cp, found);
+        if (found == null)
+            Warnings.add(String.format("文字「%s」(U+%04X) を描けるフォントがないため、空白になります", new String(Character.toChars(cp)), cp), null);
+        return found;
+    }
+
     /** 書体を PDF に埋め込む (サブセット。初回だけ)。 */
     public PDType0Font pdfFont(Face f) throws IOException {
         if (f.pdf == null) {
@@ -946,6 +984,7 @@ public final class FontManager {
         int style = (bold ? 1 : 0) | (italic ? 2 : 0);
         Face face = loadSystem(name, style);
         if (face == null) face = loadSystem(name, 0);
+        boolean substituted = face == null;
         String sub = substitute(name);
         if (face == null && sub.startsWith("ipaex")) {
             // PC にない和文フォント (ＪＳ明朝など) は、Windows (GDI) と同じくＭＳ Ｐ明朝 / ＭＳ Ｐゴシックで代用する
@@ -962,6 +1001,8 @@ public final class FontManager {
                 face = bundled(sub + "-" + STYLE_SUFFIX[style] + ".ttf");
             }
         }
+        if (substituted && warnedSubst.add(norm(name)))
+            Warnings.add("フォント「" + name + "」がないため「" + faceName(face) + "」で代用しました (文字の幅や改行の位置が Excel と変わることがあります)", null);
         // 和文フォントは、実フォントがひらがなを持てばそれを、なければ同梱の代替を CJK に使う
         Face ea = sub.startsWith("ipa") ? (face.hasGlyph(0x3042) ? face : bundled(sub + ".ttf")) : bundled(eaDefault + ".ttf");
         float[] m = metricsFor(name);
@@ -989,6 +1030,21 @@ public final class FontManager {
         }
         specs.put(key, s);
         return s;
+    }
+
+    /** 代用を警告したフォント名 (1 つの名前につき 1 回)。 */
+    private final java.util.Set<String> warnedSubst = new java.util.HashSet<>();
+
+    /** 書体の表示名 (PostScript 名。なければファイル名)。 */
+    static String faceName(Face f) {
+        try {
+            String n = f.ttf.getName();
+            if (n != null && !n.isBlank()) return n;
+        } catch (IOException | RuntimeException e) {
+            // ファイル名を使う
+        }
+        String k = f.key;
+        return k.substring(k.lastIndexOf(':') + 1).replaceFirst("\\.tt[fc]$", "");
     }
 
     /** 図形の文字で、和文の書体の行の高さに足す割合 (winAscent + winDescent に対して)。 */
@@ -1019,6 +1075,11 @@ public final class FontManager {
         s = new Spec(face, eaFace, bold, italic, asc, desc, latin);
         s.textAscent = base.textAscent;
         s.textDescent = base.textDescent;
+        // 行の高さは欧文の書体のもの。和文の文字の行は、指定した和文の書体の行の高さを使う (1 引数の spec と同じ)
+        s.lineAsc = base.lineAsc;
+        s.lineDesc = base.lineDesc;
+        s.eaFont = base.eaFont;
+        if (eas.eaFont) { s.eaLineAsc = eas.lineAsc; s.eaLineDesc = eas.lineDesc; }
         specs.put(key, s);
         return s;
     }

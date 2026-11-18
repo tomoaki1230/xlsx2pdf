@@ -44,10 +44,7 @@ public final class Warnings {
      * @param what 描けなかったもの (例: 「セル B3 の文字を描けませんでした」)
      * @param e    原因 (なければ null)
      */
-    private static final boolean TRACE = System.getProperty("xlsx2pdf.trace") != null;
-
     public static void add(String what, Throwable e) {
-        if (e != null && TRACE) e.printStackTrace();   // 開発用: -Dxlsx2pdf.trace で例外の場所を出す
         Warnings w = CURRENT.get();
         if (w == null) return;
         StringBuilder sb = new StringBuilder();

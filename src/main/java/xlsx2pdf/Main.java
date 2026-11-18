@@ -41,14 +41,14 @@ public final class Main {
                 case "--password" -> opt.password = args[++i];
                 case "--no-edit" -> opt.noEdit = true;
                 case "--owner-password" -> { opt.ownerPassword = args[++i]; opt.noEdit = true; }
-                case "--use-file-dpi" -> xlsx2pdf.render.PrintSetup.useFileDpi = true;
+                case "--use-file-dpi" -> opt.useFileDpi = true;
                 case "--screen-dpi" -> opt.screenDpi = dpiArg(args[++i], "--screen-dpi");
                 case "--printer-dpi" -> opt.printerDpi = dpiArg(args[++i], "--printer-dpi");
                 case "--author-env" -> opt.authorEnv = true;
                 case "--recalc" -> opt.recalc = true;
                 case "--max-pages" -> opt.maxPages = longArg(args[++i], "--max-pages");
                 case "--max-image-pixels" -> opt.maxImagePixels = longArg(args[++i], "--max-image-pixels");
-                case "--max-zip-entry-mb" -> opt.maxZipEntryBytes = longArg(args[++i], "--max-zip-entry-mb") << 20;
+                case "--max-zip-entry-mb" -> opt.maxZipEntryBytes = Math.min(longArg(args[++i], "--max-zip-entry-mb"), Long.MAX_VALUE >> 20) << 20;   // 桁あふれで負にしない
                 case "--max-zip-entries" -> opt.maxZipEntries = longArg(args[++i], "--max-zip-entries");
                 case "--timeout" -> opt.timeoutSeconds = longArg(args[++i], "--timeout");
                 case "--no-limits" -> noLimits = true;
