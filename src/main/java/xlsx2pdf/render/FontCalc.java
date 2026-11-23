@@ -22,7 +22,7 @@ final class FontCalc {
     private FontCalc() {}
 
     /** ファイルから読んだ値。 */
-    private record Metrics(double upm, double winAsc, double winDesc, double extLeading, Map<Integer, int[]> vdmx, double digit, Map<Integer, Integer> hdmxDigit) {}
+    private record Metrics(double upm, double winAsc, double winDesc, double extLeading, Map<Integer, int[]> vdmx, double digit, Map<Integer, Integer> hdmxDigit, double topExtra) {}
 
     private static final Map<String, Optional<Metrics>> CACHE = new ConcurrentHashMap<>();
 
@@ -51,7 +51,9 @@ final class FontCalc {
             gids[i] = cmap.getGlyphId('0' + i);
             digit = Math.max(digit, t.getAdvanceWidth(gids[i]));
         }
-        return new Metrics(upm, wa, wd, el, vdmx(t), digit, hdmx(t, gids));
+        // 上揃えで Excel が基線を下げる量 (em): hhea のアセント + 行間の半分が winAscent を超える分 (游ゴシック・游明朝 0.145)
+        double te = (hh.getAscender() + hh.getLineGap() / 2.0 - wa) / upm;
+        return new Metrics(upm, wa, wd, el, vdmx(t), digit, hdmx(t, gids), te > 0.05 ? te : 0);
     }
 
     /** VDMX の 1:1 (なければ既定) の組: ppem → {yMax, −yMin}。なければ空。 */
@@ -140,6 +142,16 @@ final class FontCalc {
         return new int[] {v != null ? v[0] : round(m.winAsc() * k), v != null ? v[1] : round(m.winDesc() * k)};
     }
 
+    /**
+     * 上揃えのセルで、Excel が基線を winAscent の位置より下げる量 (プリンタの画素)。hhea の行間 (lineGap) が大きく、
+     * アセント + 行間の半分が winAscent を超える書体 (游ゴシック・游明朝) だけ。9・11・14pt で Excel と ±0.1 画素で合う。
+     */
+    static int topExtraPx(String name, int ppem) {
+        Metrics m = metrics(name).orElse(null);
+        if (m == null || m.topExtra() <= 0 || ppem <= 0) return 0;
+        return Math.max(0, round(m.topExtra() * ppem) - 1);
+    }
+
     /** 字面の高さが em と同じフォントか (winAscent + winDescent = em、外部行間なし。ＭＳ 系・BIZ UD・HG 系など)。 */
     static boolean emHeight(String name) {
         Metrics m = metrics(name).orElse(null);
@@ -152,7 +164,7 @@ final class FontCalc {
         if (m == null) return 0;
         int p = ppem(size, dpi);
         Integer h = m.hdmxDigit.get(p);
-        return h != null ? h : Math.max(1, round(m.digit * p / m.upm));
+        return h != null && h > 0 ? h : Math.max(1, round(m.digit * p / m.upm));   // hdmx の 0 は使わない (列幅の計算で 0 で割らない)
     }
 
     private static int round(double x) {

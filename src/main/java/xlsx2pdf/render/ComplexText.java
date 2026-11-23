@@ -8,7 +8,6 @@ import java.awt.geom.Path2D;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 複雑な文字体系 (デーヴァナーガリーなどのインド系、タイ、アラビア、ヘブライなど) の整形。
@@ -25,18 +24,25 @@ public final class ComplexText {
     /** まとまりに割り当てるコードポイントの始まりと数 (第 16 面の私用領域)。 */
     static final int BASE = 0x100000, MAX = 0xFFFD;
 
-    private static final Map<String, Integer> IDS = new ConcurrentHashMap<>();
-    private static final List<String> TEXTS = new ArrayList<>();
+    /** まとまりの表 (変換ごと。変換は 1 つのスレッドで進むので、スレッドごとに持ち、変換の始めに {@link #reset} で空にする)。 */
+    private static final class Table {
+        final Map<String, Integer> ids = new java.util.HashMap<>();
+        final List<String> texts = new ArrayList<>();
+    }
+
+    private static final ThreadLocal<Table> TABLE = ThreadLocal.withInitial(Table::new);
+
+    /** 変換の始めに表を空にする (長く動くプロセスで、まとまりの番号を使い切らないように)。 */
+    public static void reset() { TABLE.set(new Table()); }
 
     /** まとまりを表すコードポイントか。 */
     public static boolean isCluster(int cp) { return cp >= BASE && cp < BASE + MAX; }
 
     /** まとまりの元の文字列。 */
     public static String text(int cp) {
-        synchronized (TEXTS) {
-            int i = cp - BASE;
-            return i >= 0 && i < TEXTS.size() ? TEXTS.get(i) : "";
-        }
+        List<String> texts = TABLE.get().texts;
+        int i = cp - BASE;
+        return i >= 0 && i < texts.size() ? texts.get(i) : "";
     }
 
     /** まとまりの最初のコードポイント (書体を選ぶのに使う)。 */
@@ -88,17 +94,14 @@ public final class ComplexText {
     }
 
     private static int id(String t) {
-        Integer v = IDS.get(t);
+        Table tb = TABLE.get();
+        Integer v = tb.ids.get(t);
         if (v != null) return v;
-        synchronized (TEXTS) {
-            v = IDS.get(t);
-            if (v != null) return v;
-            if (TEXTS.size() >= MAX) return -1;
-            TEXTS.add(t);
-            v = BASE + TEXTS.size() - 1;
-            IDS.put(t, v);
-            return v;
-        }
+        if (tb.texts.size() >= MAX) return -1;
+        tb.texts.add(t);
+        v = BASE + tb.texts.size() - 1;
+        tb.ids.put(t, v);
+        return v;
     }
 
     /** 複雑な文字体系の部分を、まとまりごとに 1 つのコードポイントへ置き換える。なければ元の文字列を返す。 */

@@ -263,7 +263,17 @@ final class SvgPainter {
             at.translate(-vb[0], -vb[1]);
         }
         cv.transform(at);
-        children(cv, e, st);
+        // 中の % の長さは、入れ子の svg の大きさ (viewBox があればその大きさ) が基準
+        double keepW = vbW, keepH = vbH;
+        boolean hasVb = vb.length == 4 && vb[2] > 0 && vb[3] > 0;
+        vbW = hasVb ? vb[2] : w;
+        vbH = hasVb ? vb[3] : h;
+        try {
+            children(cv, e, st);
+        } finally {
+            vbW = keepW;
+            vbH = keepH;
+        }
     }
 
     /** use: 参照先を x・y へ移して描く (symbol は中身を描く)。 */
@@ -277,9 +287,19 @@ final class SvgPainter {
             if ("symbol".equals(ref.getLocalName())) {
                 Style s2 = style(ref, st, declared(ref));
                 double[] vb = numbers(ref.getAttribute("viewBox"));
-                if (vb.length == 4 && vb[2] > 0 && vb[3] > 0 && e.hasAttribute("width") && e.hasAttribute("height")) {
-                    double w = length(e.getAttribute("width"), vb[2], vbW), h = length(e.getAttribute("height"), vb[3], vbH);
-                    AffineTransform at = AffineTransform.getScaleInstance(w / vb[2], h / vb[3]);
+                if (vb.length == 4 && vb[2] > 0 && vb[3] > 0) {
+                    // use の幅・高さ (なければ 100%) に viewBox を合わせる。preserveAspectRatio の既定は xMidYMid meet
+                    double w = e.hasAttribute("width") ? length(e.getAttribute("width"), vbW, vbW) : vbW;
+                    double h = e.hasAttribute("height") ? length(e.getAttribute("height"), vbH, vbH) : vbH;
+                    double sx = w / vb[2], sy = h / vb[3], tx = 0, ty = 0;
+                    if (!ref.getAttribute("preserveAspectRatio").trim().startsWith("none")) {
+                        double k = Math.min(sx, sy);
+                        tx = (w - vb[2] * k) / 2;
+                        ty = (h - vb[3] * k) / 2;
+                        sx = sy = k;
+                    }
+                    AffineTransform at = AffineTransform.getTranslateInstance(tx, ty);
+                    at.scale(sx, sy);
                     at.translate(-vb[0], -vb[1]);
                     cv.transform(at);
                 }

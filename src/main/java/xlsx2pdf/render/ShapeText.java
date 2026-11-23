@@ -410,7 +410,11 @@ public final class ShapeText {
             }
             for (int li = 0; li < lines.size(); li++) {
                 TextLayout.Line l = lines.get(li);
-                if (l.runs.isEmpty() && l.ascent == 0) {
+                if (l.runs.isEmpty() && l.blankBase != null) {
+                    // 段落の中の空行 (改行が続く行): 直前の行の先頭のランの書体の行の高さ (和文の 1.3 倍を足さない欧文の行。Excel の実測)
+                    l.ascent = l.blankBase.spec.lineAsc * l.blankBase.size;
+                    l.descent = l.blankBase.spec.lineDesc * l.blankBase.size;
+                } else if (l.runs.isEmpty() && l.ascent == 0) {
                     l.ascent = p.endSpec.lineAsc * p.endSize;
                     l.descent = p.endSpec.lineDesc * p.endSize;
                 }
@@ -449,7 +453,8 @@ public final class ShapeText {
                 case "r" -> x = x0 + aw - l.width;
                 case "just" -> {
                     x = x0;
-                    if (!l.endsParagraph) { extra = (float) (aw - l.width); mode = 1; }
+                    // 行が使える幅より長い (折り返さない図形) ときは配らない (負の余りで文字を重ねない)
+                    if (!l.endsParagraph) { extra = (float) Math.max(0, aw - l.width); mode = 1; }
                 }
                 case "dist" -> {
                     x = x0;

@@ -370,6 +370,7 @@ public final class Converter {
      */
     private void render(OPCPackage pkg, File source, String name, PdfSink sink) throws IOException {
         collecting = xlsx2pdf.render.Warnings.start();
+        xlsx2pdf.render.ComplexText.reset();
         try {
             try (XSSFWorkbook wb = new XSSFWorkbook(pkg);
                  PDDocument doc = new PDDocument()) {
@@ -380,7 +381,7 @@ public final class Converter {
                 ctx.printer.authorEnv = opt.authorEnv;
                 ctx.fonts.checkFallbacks();
                 if (opt.recalc) {
-                    xlsx2pdf.render.Recalc.run(wb, this::checkDeadline);
+                    xlsx2pdf.render.Recalc.run(wb, this::checkDeadline, source != null ? source.getAbsolutePath() : (name == null || name.isEmpty() ? null : name));
                     ctx.recalc = true;
                 }
                 List<SheetJob> jobs = new ArrayList<>();
@@ -401,8 +402,18 @@ public final class Converter {
                 for (SheetJob j : jobs) {
                     total += j.pages.size();
                     if (!j.chart && "atEnd".equals(j.ps.comments)) {
+                        xlsx2pdf.render.Warnings.sheet(j.sheet.getSheetName());   // コメントの読み取りの警告を、このシートの名前で出す
                         List<List<String[]>> np = commentPages(ctx, j);
-                        if (!np.isEmpty()) { notes.put(j, np); total += np.size(); }
+                        checkDeadline();
+                        if (!np.isEmpty()) {
+                            // コメントの一覧のページも、ページ数の上限に数える
+                            if (opt.maxPages > 0 && pagesMade + np.size() > opt.maxPages) {
+                                throw new LimitExceededException("ページ数が上限 (" + opt.maxPages + ") を超えます (シート「" + j.sheet.getSheetName() + "」のコメントの一覧)。--max-pages で上限を変更できます", false);
+                            }
+                            pagesMade += np.size();
+                            notes.put(j, np);
+                            total += np.size();
+                        }
                     }
                 }
                 int pageNo = 0;
@@ -419,6 +430,7 @@ public final class Converter {
                     List<List<String[]>> np = notes.get(j);
                     if (np != null) {
                         for (int p = 0; p < np.size(); p++) {
+                            checkDeadline();
                             pageNo++;
                             renderCommentPage(ctx, doc, j, np.get(p), j.pages.size() + p, pageNo, total, hf);
                         }
@@ -427,6 +439,8 @@ public final class Converter {
                 if (doc.getNumberOfPages() == 0) {
                     // Excel は空のブックを印刷しない。有効な PDF にするため白紙を 1 ページ出す
                     doc.addPage(new PDPage(PDRectangle.A4));
+                    xlsx2pdf.render.Warnings.sheet(null);   // 最後に調べたシートの名前を付けない
+                    xlsx2pdf.render.Warnings.add("印刷するシートがないため、白紙の A4 を 1 ページ出力しました (--sheet の名前・非表示のシート・--active-only を確かめてください)", null);
                 }
                 PDDocumentInformation info = doc.getDocumentInformation();
                 info.setProducer("xlsx2pdf");
@@ -713,7 +727,7 @@ public final class Converter {
         if (opt.maxPages > 0 && pagesMade >= opt.maxPages) {
             throw new LimitExceededException("ページ数が上限 (" + opt.maxPages + ") を超えます (シート「" + sheet.getSheetName() + "」)。--max-pages で上限を変更できます", false);
         }
-        paginator.setMaxPages(opt.maxPages > 0 ? opt.maxPages - pagesMade : 0);
+        paginator.setMaxPages(opt.maxPages > 0 ? opt.maxPages - pagesMade : 0, opt.maxPages);
         checkDeadline();
         List<Paginator.Page> pages = paginator.paginate(areas);
         pagesMade += pages.size();
@@ -880,7 +894,7 @@ public final class Converter {
 
     /** コメントの一覧の行送り (標準フォントの行の高さ)。 */
     private static double notePitch(RenderContext ctx, SheetJob j) {
-        double p = j.layout.linePitch(ctx.defaultFontName, ctx.defaultFontSize);
+        double p = j.layout.linePitch(ctx.defaultFontName, ctx.defaultFontSize, false);
         return p > 0 ? p : ctx.defaultFontSize * 1.68;
     }
 
@@ -969,13 +983,13 @@ public final class Converter {
             cv.save();
             hf.paint(cv, ps, ps.paperW, ps.paperH, pg.scale, pageInSheet, pageNo, total, j.sheet.getSheetName());
             cv.restore();
+            j.drawings.bw = ps.blackAndWhite;
             if (j.chart) {
                 cv.save();
                 j.drawings.paintChartSheet(cv, pg.offsetX, pg.offsetY, pg.contentW - CS_DW, pg.contentH - CS_DH);
                 cv.restore();
             } else {
                 // 右から左のシート: 本体を用紙の中心で左右反転して描く (A 列が右端。文字と図形の中身は反転を打ち消す)
-                j.drawings.bw = ps.blackAndWhite;
                 if (ps.rtl) {
                     cv.save();
                     cv.transform(PdfCanvas.flipAbout(ps.paperW / 2));

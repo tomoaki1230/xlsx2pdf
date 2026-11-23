@@ -123,6 +123,8 @@ public final class TextLayout {
         public float width;
         /** 空行の高さを決めるラン (空行でなければ null)。 */
         public Run blankBase;
+        /** 行を終える改行文字のラン (改行で終わらない行は null)。 */
+        public Run newlineRun;
         /** 行のアセント・ディセント (pt)。 */
         public float ascent, descent;
         /** 段落の最後の行 (改行または文字列の終わり) か。 */
@@ -200,9 +202,9 @@ public final class TextLayout {
     }
 
     /**
-     * 行数の数え方 (行の高さの数え直し用): 全角の空白を行末にぶら下げず、普通の文字と同じく次の行へ送る。送った後の行頭の
-     * 空白は捨てるが、空白だけで空のまま改行に来た行は 1 行に数える。Excel の行の高さの数え直しの実測
-     * (」+ 全角の空白 15 個 + 改行で 1 行増える)。描くときはぶら下げる。
+     * 行数の数え方 (行の高さの数え直し用)。送り幅は画面の整数の画素。全角の空白は描くときと同じく行末にぶら下げる
+     * (全角の空白を次の行へ送る数え方は、Excel の 1 つの実測 (」+ 全角の空白 15 個 + 改行) には合うが、全体では
+     * 合わなかったので採らない。wideSpaceWraps はそのための引数で、今は常に false)。
      */
     public static List<Line> layoutCounting(List<Run> runs, float maxWidth, FontManager fm) {
         return layout(runs, maxWidth, true, true, fm, null, 0, 0, false, true);
@@ -226,6 +228,7 @@ public final class TextLayout {
         }
         List<List<Ch>> lines = new ArrayList<>();
         List<Boolean> paraEnd = new ArrayList<>();
+        List<Run> nlRuns = new ArrayList<>();
         List<Ch> cur = new ArrayList<>();
         float curW = 0;
         int lastBreak = -1; // 改行できる位置 (cur の添字。行はその直前で終わる)
@@ -235,6 +238,7 @@ public final class TextLayout {
             if (c.cp == '\n') {
                 lines.add(cur);
                 paraEnd.add(true);
+                nlRuns.add(c.run);
                 cur = new ArrayList<>();
                 curW = 0;
                 lastBreak = -1;
@@ -261,6 +265,7 @@ public final class TextLayout {
                     // 行末の空白は幅に数えない (後で除く)
                     lines.add(cur);
                     paraEnd.add(false);
+                    nlRuns.add(null);
                     // 次の行の先頭の空白は捨てる
                     while (!next.isEmpty() && isSpace(next.get(0).cp)) next.remove(0);
                     cur = next;
@@ -281,6 +286,7 @@ public final class TextLayout {
         }
         lines.add(cur);
         paraEnd.add(true);
+        nlRuns.add(null);
 
         List<Line> out = new ArrayList<>();
         boolean paraStart = true;
@@ -290,6 +296,7 @@ public final class TextLayout {
             paraStart = paraEnd.get(li);
             Line line = new Line();
             line.endsParagraph = paraEnd.get(li);
+            line.newlineRun = nlRuns.get(li);
             int end = l.size();
             if (wrap) while (end > 0 && isSpace(l.get(end - 1).cp)) end--;
             // 同じランの文字をまとめ直す
@@ -387,6 +394,7 @@ public final class TextLayout {
             double start = pos;
             if (r.tabW >= 0) {
                 pos += r.tabW;
+                k += r.text.codePointCount(0, r.text.length());   // 均等割り付けの次の文字の位置をずらさない
                 continue;
             }
             if (r.shadow != null) cv.text(r.text, pos + r.shadowDx, base + r.shadowDy, r.spec, sz, r.shadow, 1, r.spacing);

@@ -144,7 +144,7 @@ public final class Main {
         File in = new File(files.get(0));
         File out = new File(files.get(1));
         if (!in.isFile()) {
-            System.err.println("input not found: " + in);
+            System.err.println("入力ファイルが見つかりません: " + in);
             System.exit(1);
         }
         if (Converter.samePath(in, out)) {

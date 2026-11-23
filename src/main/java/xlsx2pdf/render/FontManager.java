@@ -219,9 +219,21 @@ public final class FontManager {
         boolean msGrid() {
             if (msGrid == null) {
                 String n = requested == null ? "" : norm(requested);
-                msGrid = PrinterModel.isMs(n) && !((n.startsWith("ms p") || n.startsWith("msp")));
+                // MS UI Gothic はプロポーショナル (格子に吸着しない。格子にすると約 1.2% 広くなる)
+                msGrid = PrinterModel.isMs(n) && !((n.startsWith("ms p") || n.startsWith("msp") || n.startsWith("ms ui") || n.startsWith("msui"))) || hgMono(n);
             }
             return msGrid;
+        }
+
+        /**
+         * 等幅の HG 書体 (HGｺﾞｼｯｸM・HG明朝B・HG創英角ﾎﾟｯﾌﾟ体 など。HGP・HGS・HG丸ｺﾞｼｯｸ は除く)。ＭＳ ゴシック/明朝と同じく全角 = 半角 × 2 の格子
+         * (格子にしないと、ppem が奇数の倍率で約 1.3% 狭くなる)。
+         */
+        static boolean hgMono(String n) {
+            String m = n.replace(" ", "");
+            if (!m.startsWith("hg") || m.startsWith("hgp") || m.startsWith("hgs") || m.contains("丸") || m.contains("maru")) return false;
+            return m.contains("ｺﾞｼｯｸ") || m.contains("ゴシック") || m.contains("明朝") || m.contains("gothic") || m.contains("mincho")
+                    || m.contains("ﾎﾟｯﾌﾟ") || m.contains("ポップ") || m.contains("pop");
         }
 
         /** 文字列の幅 (pt)。 */
@@ -596,7 +608,7 @@ public final class FontManager {
             if (es == null) {
                 changed = true;
                 Map<String, Map<Integer, Loc>> one = new HashMap<>();
-                readFont(f, one);
+                if (!readFont(f, one)) continue;   // メモリ不足などの一時的な失敗: キャッシュに記録せず、次の変換で読み直す
                 es = new ArrayList<>();
                 for (var e : one.entrySet())
                     for (var x : e.getValue().entrySet())
@@ -634,8 +646,12 @@ public final class FontManager {
         }
     }
 
-    /** フォントファイルを読んで、書体を登録する。 */
-    private static void readFont(File f, Map<String, Map<Integer, Loc>> out) {
+    /**
+     * フォントファイルを読んで、書体を登録する。
+     *
+     * @return 読めた、または壊れていて読めない (どちらも結果をキャッシュしてよい) なら true。メモリ不足など一時的な失敗なら false
+     */
+    private static boolean readFont(File f, Map<String, Map<Integer, Loc>> out) {
         String n = f.getName().toLowerCase(Locale.ROOT);
         try {
             if (n.endsWith(".ttf")) {
@@ -647,9 +663,12 @@ public final class FontManager {
                     c.processAllFonts(t -> register(t, f, true, out));
                 }
             }
+        } catch (VirtualMachineError e) {
+            return false;
         } catch (Exception | Error e) {
             // 読めないフォントは無視する
         }
+        return true;
     }
 
     /** 書体を、ファミリ名と完全名 (name ID 1, 4) で登録する。 */
@@ -984,6 +1003,8 @@ public final class FontManager {
         int style = (bold ? 1 : 0) | (italic ? 2 : 0);
         Face face = loadSystem(name, style);
         if (face == null) face = loadSystem(name, 0);
+        // 標準の書体がなく太字・斜体だけのファミリー (「UD デジタル 教科書体 NK-B」は太字の 1 書体だけ) は、Windows と同じくその書体を使う
+        for (int st = 1; face == null && st <= 3; st++) face = loadSystem(name, st);
         boolean substituted = face == null;
         String sub = substitute(name);
         if (face == null && sub.startsWith("ipaex")) {

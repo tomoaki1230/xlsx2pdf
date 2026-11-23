@@ -29,6 +29,11 @@ public final class RenderContext {
     public final double defaultFontSize;
     /** 標準フォントの最大数字幅 (96 dpi の画面ピクセル)。 */
     public final int mdw;
+    /**
+     * セルの字下げ 1 段の幅 (用紙の pt、倍率 100%)。標準フォントの空白の送りの 3 倍: 3 × round(round(大きさ × 600 ÷ 72) × 空白の幅 (em))
+     * 画素 (600 dpi)。標準フォント 11 書体 × 大きさ 27 通りで Excel と一致する。
+     */
+    public final double indentStepPt;
     /** Excel の印刷時の列幅・行高の換算モデル。 */
     public final PrinterModel printer;
     /** 日本語のブック (標準フォントまたはテーマの東アジアフォントが日本語) か。 */
@@ -200,7 +205,7 @@ public final class RenderContext {
      * @param source   変換元のファイル
      */
     /** 標準のスタイル (builtinId 0) の名前が「標準」か。 */
-    private static boolean normalStyleJa(XSSFWorkbook wb) {
+    public static boolean normalStyleJa(XSSFWorkbook wb) {
         try {
             var css = wb.getStylesSource().getCTStylesheet().getCellStyles();
             if (css == null) return false;
@@ -297,6 +302,9 @@ public final class RenderContext {
         if (ja) fonts.setEastAsianDefault(defaultFontName);
         else if (theme.minorJpan != null) fonts.setEastAsianDefault(theme.minorJpan);
         this.mdw = fonts.maxDigitWidthPx(metricFont, (float) defaultFontSize);
+        double spEm = fonts.spec(metricFont, false, false).charWidth(' ', 1f, fonts);
+        long ppem = Math.round(defaultFontSize * 600 / 72.0);
+        this.indentStepPt = spEm > 0 ? 3 * Math.floor(ppem * spEm + 0.5) * 72 / 600.0 : mdw * 1.5 * 1.125 * 0.75;
         this.printer = new PrinterModel(fonts, metricFont, defaultFontSize, mdw);
         this.printer.appVersion = appVersion(wb);
         this.printer.nonExcel = nonExcel(wb);

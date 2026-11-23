@@ -101,7 +101,7 @@ public final class SheetLayout {
      */
     /**
      * customHeight のない行に 2 行以上に折り返すセルがあれば、Excel と同じく変換する環境の画面で行数を数え直し、行数 × フォントの画面の標準行に
-     * する。画面の文字は ＭＳ 明朝・ＭＳ ゴシック (固定幅) なら「画面の ppem + 1」、ほかは ppem の大きさで測る (z_kekkaichiran 系 3 件 2464 行で 2451 行一致)。
+     * する。画面の文字は ＭＳ 明朝・ＭＳ ゴシック (固定幅) なら「画面の ppem + 1」、ほかは ppem の大きさで測る。
      * 単独の CR では改行しない、選択範囲内で中央のセルは数えない、上限 409.5pt。
      * 未解決: Excel が測り直さず保存値のままの行もある。
      */
@@ -259,7 +259,9 @@ public final class SheetLayout {
                     int fit = refitPx(row);
                     if (colStdPx > 0 && fit > 0 && !(row.isFormatted() && row.getRowStyle() != null)) fit = Math.max(fit, colStdPx);
                     double stored = toPx(row.getCTRow().getHt());
-                    if (fit > 0 && Math.abs(stored - fit) <= HTONLY_REFIT * fit) rowPx[r] = fit;
+                    // 作成者の既定の行高が同じで (比 1) 列の書式の標準行で測り直すときは、保存値の方が 1.5 画素以上低ければ保存値のまま
+                    // (1 画素だけ低い行と、比が 1 でないときは測り直す)
+                    if (fit > 0 && Math.abs(stored - fit) <= HTONLY_REFIT * fit && !(stored < fit - 1.5 && htOnlyRatio == 1)) rowPx[r] = fit;
                 }
                 if (rw <= 0 && !custom && !model.authorEnv && this.screenDpi == 96) {
                     skipMerged = true;
@@ -343,15 +345,25 @@ public final class SheetLayout {
     public double devUnitX() { return 72.0 / hdpi / realScale(); }
 
     /** 指定フォントの文字の行送り (シートの pt): 現在の倍率での自動調整行の高さ。 */
-    /** 縦書きの字送り (シートの pt): 倍率で実体化した自動調整行の高さ。 */
+    /** 縦書きの字送り (シートの pt): 字面の高さが em と同じフォントは縮めた ppem + 10 画素、ほかは自動調整行の高さ。 */
     public double stackPitch(String font, double sizePt) {
         if (font == null || sizePt <= 0) return 0;
+        // 字面の高さが em と同じフォントは、100% の配置を縮める (linear) シートでも実際の印刷倍率で決まる (63% の 16pt で 94 画素)
+        int em = model.stackPitchEmDev(font, sizePt, scale, vdpi);
+        if (em > 0) return em * 72.0 / vdpi / scale;
         return model.autoRowDev(font, sizePt, realScale(), vdpi) * 72.0 / vdpi / realScale();
     }
 
-    public double linePitch(String font, double sizePt) {
+    /** セルの折り返しの行送り (シートの pt)。 */
+    public double linePitch(String font, double sizePt) { return linePitch(font, sizePt, true); }
+
+    /**
+     * 行送り (シートの pt)。cell: セルの折り返し (游ゴシック・メイリオの縮小時は 100% の行送りを倍率で丸める)。false はコメントの一覧など
+     * (縮めた大きさで計算し直す)。
+     */
+    public double linePitch(String font, double sizePt, boolean cell) {
         if (font == null || sizePt <= 0) return 0;
-        if (!model.authorEnv) return model.linePitchDev(font, sizePt, scale, vdpi) * 72.0 / vdpi / Math.max(0.01, scale);
+        if (!model.authorEnv) return model.linePitchDev(font, sizePt, scale, vdpi, cell) * 72.0 / vdpi / Math.max(0.01, scale);
         return model.autoRowDev(font, sizePt, realScale(), vdpi) * 72.0 / vdpi / realScale();
     }
 
@@ -476,14 +488,26 @@ public final class SheetLayout {
                     px96.put(ru.fontName + "|" + ru.ptSize, m);
                 }
                 List<TextLayout.Line> lines = TextLayout.layoutCounting(runs, (float) ((px - REWRAP) * 0.75), fm);
-                int h = 0;
+                int h = 0, prevLh = line;
                 for (TextLayout.Line ln : lines) {
                     int lh = 0;
                     for (TextLayout.Run ru : ln.runs) {
                         Integer m = px96.get(ru.fontName + "|" + ru.ptSize);
                         if (m != null && !ru.text.isEmpty()) lh = Math.max(lh, m);
                     }
+                    // 行を終える改行文字の書式も数える (空行はその書式の高さ。CellPainter.bigRun と同じ)
+                    TextLayout.Run nr = ln.newlineRun;
+                    int li = lines.indexOf(ln);
+                    if (nr == null && li > 0 && li == lines.size() - 1 && ln.runs.isEmpty()) {
+                        h += prevLh;   // 末尾の空行は前の行と同じ高さ (CellPainter.newlineHeights)
+                        continue;
+                    }
+                    if (nr != null) {
+                        Integer m = px96.get(nr.fontName + "|" + nr.ptSize);
+                        if (m != null) lh = Math.max(lh, m);
+                    }
                     h += lh > 0 ? lh : line;
+                    prevLh = lh > 0 ? lh : line;
                 }
                 if (lines.size() >= 2) multi = true;
                 fit = Math.max(fit, h);
@@ -519,7 +543,7 @@ public final class SheetLayout {
     /** 行にふりがなを表示するセル (結合セルを除く) があるか。 */
     private boolean hasRuby(XSSFRow row) {
         for (Cell cell : row)
-            if (!merged.containsKey(key(cell.getRowIndex(), cell.getColumnIndex())) && rubyPx(cell) > 0) return true;
+            if (mergedAt(cell.getRowIndex(), cell.getColumnIndex()) == null && rubyPx(cell) > 0) return true;
         return false;
     }
 
@@ -585,15 +609,25 @@ public final class SheetLayout {
         return m;
     }
 
-    /** HTONLY_REFIT: 行の全セル (複数行の結合を除く) と行の書式のフォントの、変換する環境の画面の標準行の最大 (px。表にないフォントがあれば 0)。 */
+    /** 列の書式の番号が有効か (4294967295 などの範囲外・min が max より大きい col は無視する)。 */
+    private boolean validColStyle(CTCol c) {
+        return c.isSetStyle() && c.getStyle() <= Integer.MAX_VALUE
+                && c.getStyle() < sheet.getWorkbook().getNumCellStyles() && c.getMax() >= c.getMin();
+    }
+
+    /** col が覆う列の数 (1〜16384 に収める)。 */
+    private static long colSpan(CTCol c) {
+        return Math.max(0, Math.min(c.getMax(), 16384L) - Math.max(c.getMin(), 1L) + 1);
+    }
+
     /** シートの標準行を決めるフォント「名前|大きさ」: 列の書式のフォント (16384 列目までのうち書式のない列があれば標準フォントも)。 */
     public Set<String> sheetRowFonts() {
         Set<String> fs = new LinkedHashSet<>();
         long covered = 0;
         for (CTCols cols : sheet.getCTWorksheet().getColsArray())
             for (CTCol c : cols.getColArray()) {
-                if (!c.isSetStyle()) continue;
-                covered += c.getMax() - c.getMin() + 1;
+                if (!validColStyle(c)) continue;
+                covered += colSpan(c);
                 XSSFFont f = sheet.getWorkbook().getCellStyleAt((int) c.getStyle()).getFont();
                 fs.add(fkey(f));
             }
@@ -623,10 +657,6 @@ public final class SheetLayout {
     /** 列の標準行にふりがなの分を足したか (足したら、高さのない行でセルのふりがなを重ねて足さない)。 */
     private boolean colPhRuby;
 
-    /**
-     * Excel の行の自動調整: 行の全列について、セルがあればセルのフォント、なければ行の書式、なければ列の書式、なければ標準フォントの、
-     * 画面の標準行の最大 (px。表にないフォントがあれば 0)。複数行の結合セルは数えない。太い罫線の印ごとに +1。
-     */
     /** autoRowPx で値のある 1 行の結合セルを数えないか (ht のある行の自動調整の下限のときだけ)。 */
     private boolean skipMerged;
     /** autoRowPx の書体の標準行の最大 (基準線の和を足す前。px)。 */
@@ -636,6 +666,10 @@ public final class SheetLayout {
         return c.getCellType() == CellType.BLANK || c.getCellType() == CellType.STRING && c.getStringCellValue().isEmpty();
     }
 
+    /**
+     * Excel の行の自動調整: 行の全列について、セルがあればセルのフォント、なければ行の書式、なければ列の書式、なければ標準フォントの、
+     * 画面の標準行の最大 (px。表にないフォントがあれば 0)。複数行の結合セルは数えない。太い罫線の印ごとに +1。
+     */
     private int autoRowPx(XSSFRow row) {
         Map<String, Boolean> fs = new java.util.LinkedHashMap<>();
         Set<String> texts = new java.util.HashSet<>(); // 文字のある下揃えのセルのフォント
@@ -643,7 +677,7 @@ public final class SheetLayout {
         Set<Integer> have = new java.util.HashSet<>();
         for (Cell cell : row) {
             have.add(cell.getColumnIndex());
-            CellRangeAddress mg = merged.get(key(cell.getRowIndex(), cell.getColumnIndex()));
+            CellRangeAddress mg = mergedAt(cell.getRowIndex(), cell.getColumnIndex());
             if (mg != null && mg.getFirstRow() != mg.getLastRow()) continue;
             if (skipMerged && mg != null && !cellEmpty(cell)) continue;   // 値のある 1 行の結合セルの字で高くしない
             XSSFCellStyle st = (XSSFCellStyle) cell.getCellStyle();
@@ -670,8 +704,8 @@ public final class SheetLayout {
             long covered = 0;
             for (CTCols cols : sheet.getCTWorksheet().getColsArray())
                 for (CTCol c : cols.getColArray()) {
-                    if (!c.isSetStyle()) continue;
-                    long n = c.getMax() - c.getMin() + 1;
+                    if (!validColStyle(c)) continue;
+                    long n = colSpan(c);
                     covered += n;
                     long inCells = 0;
                     for (int col : have) if (col + 1 >= c.getMin() && col + 1 <= c.getMax()) inCells++;
@@ -704,7 +738,7 @@ public final class SheetLayout {
         if (parts) fit = Math.max(fit, above + below);
         // ふりがなを表示するセル (結合セルを除く): セルのフォントの標準行 + ふりがなのフォントの標準行
         for (Cell cell : row) {
-            if (merged.containsKey(key(cell.getRowIndex(), cell.getColumnIndex()))) continue;   // 結合セルは数えない
+            if (mergedAt(cell.getRowIndex(), cell.getColumnIndex()) != null) continue;   // 結合セルは数えない
             int ru = rubyPx(cell);
             if (ru <= 0) continue;
             XSSFFont f = ((XSSFCellStyle) cell.getCellStyle()).getFont();
@@ -748,7 +782,7 @@ public final class SheetLayout {
             fs.add(fkey(rf));
         }
         for (Cell cell : row) {
-            CellRangeAddress mg = merged.get(key(cell.getRowIndex(), cell.getColumnIndex()));
+            CellRangeAddress mg = mergedAt(cell.getRowIndex(), cell.getColumnIndex());
             if (mg != null && (noMerged || mg.getFirstRow() != mg.getLastRow())) continue;
             if (((XSSFCellStyle) cell.getCellStyle()).getRotation() != 0) continue;
             XSSFFont f = ((XSSFCellStyle) cell.getCellStyle()).getFont();
@@ -771,7 +805,7 @@ public final class SheetLayout {
         Set<String> out = new LinkedHashSet<>();
         for (Cell cell : row) {
             if (CellPainter.isEmpty((XSSFCell) cell)) continue;
-            CellRangeAddress mg = merged.get(key(cell.getRowIndex(), cell.getColumnIndex()));
+            CellRangeAddress mg = mergedAt(cell.getRowIndex(), cell.getColumnIndex());
             if (mg != null) continue;
             XSSFFont f = ((XSSFCellStyle) cell.getCellStyle()).getFont();
             out.add(fkey(f));
@@ -964,10 +998,10 @@ public final class SheetLayout {
     }
 
     /** 列幅 (シートの pt)。 */
-    public double cw(int c) { return c < maxCol ? colW[c] : colW[maxCol - 1]; }
+    public double cw(int c) { return c < maxCol ? colW[Math.max(0, c)] : colW[maxCol - 1]; }
 
     /** 倍率で丸める前 (100%) の列幅 (シートの pt)。 */
-    public double cw100(int c) { return c < maxCol ? colW100[c] : colW100[maxCol - 1]; }
+    public double cw100(int c) { return c < maxCol ? colW100[Math.max(0, c)] : colW100[maxCol - 1]; }
 
     /** 画面の列幅 (pt、プリンタへの換算前。Excel の Columns.Width)。 */
     public double screenColPt(int c) { return c < maxCol ? colScr[c] : colScr[maxCol - 1]; }
@@ -979,7 +1013,7 @@ public final class SheetLayout {
     private double[] rowEffPx;
 
     /** 行高 (シートの pt)。 */
-    public double rh(int r) { return r < maxRow ? rowH[r] : defaultRowH; }
+    public double rh(int r) { return r < maxRow ? rowH[Math.max(0, r)] : defaultRowH; }   // 不正なアンカーの負の行・列は 0 として扱う
 
     /**
      * 値または見える書式のあるセルの範囲を返す。
@@ -1169,6 +1203,8 @@ public final class SheetLayout {
                 if (c >= maxCol || cw[c] || colChars[c] <= 0 || mergedAt(cell.getRowIndex(), c) != null) continue;
                 // 数式のセルは広げない (数式の結果のエラー値で Excel は広げない)
                 if (cell.getCellType() == CellType.FORMULA) continue;
+                // セルに配置した画像 (vm。値は #VALUE! のエラー) は文字を描かないので広げない
+                if (((org.apache.poi.xssf.usermodel.XSSFCell) cell).getCTCell().isSetVm()) continue;
                 CellType t = cell.getCellType() == CellType.FORMULA ? cell.getCachedFormulaResultType() : cell.getCellType();
                 String text;
                 boolean num = false;

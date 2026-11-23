@@ -62,7 +62,7 @@ public final class DrawingPainter {
                 drawingPart = d.getPackagePart();
                 try (InputStream in = drawingPart.getInputStream()) {
                     Element root = Xml.parse(in);
-                    anchors.addAll(Xml.resolveAlternate(root, Set.of("a14", "x14", "cx1", "cx2", "cx4", "sle15", "sle", "tsle")));
+                    anchors.addAll(Xml.resolveAlternate(root, ALT_SUPPORTED));
                 } catch (Exception e) {
                     // 読めない描画は無視する
                     Warnings.add("図形の定義を読めませんでした", e);
@@ -178,10 +178,12 @@ public final class DrawingPainter {
                 if (tmp == null) tmp = new SheetLayout(sheet, ctx.mdw, ctx.printer, 600, 600, 3000, 300);
                 SheetLayout saved = L;
                 L = tmp;
-                judging = true;
-                Rectangle2D r = rect(an);
-                judging = false;
-                L = saved;
+                Rectangle2D r;
+                try {
+                    r = judgedRect(an);
+                } finally {
+                    L = saved;
+                }
                 int[] end = cellAt(tmp, r.getMaxX(), r.getMaxY());
                 int[] st = cellAt(tmp, r.getX(), r.getY());
                 lr = Math.max(lr, end[0]);
@@ -206,15 +208,23 @@ public final class DrawingPainter {
         double x0 = L.x(c0), y0 = L.y(r0), x1 = L.x(c1 + 1), y1 = L.y(r1 + 1);
         for (Element a : anchors) {
             if (!printable(a)) continue;
-            judging = true;
-            Rectangle2D r = rect(anchor(a));
-            judging = false;
+            Rectangle2D r = judgedRect(anchor(a));
             if (r.getMaxX() > x0 && r.getX() < x1 && r.getMaxY() > y0 && r.getY() < y1) return true;
         }
         for (VmlControls.Control c : controls) {
             if (c.print && c.r1 >= r0 && c.r0 <= r1 && c.c1 >= c0 && c.c0 <= c1) return true;
         }
         return false;
+    }
+
+    /** 判定用の矩形 (描くときの左上への平行移動をしない)。例外でもフラグを戻す。 */
+    private Rectangle2D judgedRect(Anchor an) {
+        judging = true;
+        try {
+            return rect(an);
+        } finally {
+            judging = false;
+        }
     }
 
     /** 位置 (x, y) を含むセル {行, 列}。 */
@@ -241,7 +251,7 @@ public final class DrawingPainter {
             switch (c.getLocalName()) {
                 case "sp", "grpSp", "pic", "graphicFrame", "cxnSp" -> { return c; }
                 case "AlternateContent" -> {
-                    List<Element> r = Xml.resolveAlternate(anchor, Set.of("a14", "cx1", "cx2", "cx4", "sle15", "sle", "tsle"));
+                    List<Element> r = Xml.resolveAlternate(anchor, ALT_SUPPORTED);
                     for (Element x : r) {
                         String n = x.getLocalName();
                         if (n.equals("sp") || n.equals("grpSp") || n.equals("pic") || n.equals("graphicFrame") || n.equals("cxnSp")) return x;
@@ -273,10 +283,15 @@ public final class DrawingPainter {
      */
     /** 右から左のシート (本体を左右反転して描く)。 */
     public boolean rtl;
+    /** mc:AlternateContent で選べる拡張 (mc:Choice の Requires)。描画の直下・アンカーの中・グループの中で同じ。 */
+    static final Set<String> ALT_SUPPORTED = Set.of("a14", "x14", "cx1", "cx2", "cx4", "sle15", "sle", "tsle");
+
     /** アンカーの位置の数 (col・row・colOff・rowOff)。空や数でなければ 0 (非 Excel のファイルで、シート全体を止めない)。 */
     private static long anchorNum(Element parent, String name) {
         try {
-            return Long.parseLong(Xml.text(Xml.child(parent, name)).trim());
+            long v = Long.parseLong(Xml.text(Xml.child(parent, name)).trim());
+            // 行・列の番号が負の不正なアンカーは 0 として扱う (オフセットは負でもよい)
+            return v < 0 && (name.equals("col") || name.equals("row")) ? 0 : v;
         } catch (RuntimeException e) {
             return 0;
         }
@@ -290,9 +305,7 @@ public final class DrawingPainter {
         for (Element a : anchors) {
             if (!printable(a)) continue;
             Anchor an = anchor(a);
-            judging = true;
-            Rectangle2D r0 = rect(an);
-            judging = false;
+            Rectangle2D r0 = judgedRect(an);
             // 幅か高さが 0 の図形 (水平・垂直の線) も、範囲が重なるブロックだけで描く
             boolean flat = r0.getWidth() == 0 || r0.getHeight() == 0;
             if (flat ? r0.getMaxX() < view.getX() || r0.getX() > view.getMaxX() || r0.getMaxY() < view.getY() || r0.getY() > view.getMaxY()
@@ -365,10 +378,10 @@ public final class DrawingPainter {
      */
     private void paintObject(PdfCanvas cv, Element obj, Rectangle2D r, Element parentGroupFill) throws IOException {
         switch (obj.getLocalName()) {
-            case "sp", "cxnSp" -> paintShape(cv, obj, r, parentGroupFill);
-            case "pic" -> paintPicture(cv, obj, r);
+            case "sp", "cxnSp" -> { cv.beginMark("X2PShape"); try { paintShape(cv, obj, r, parentGroupFill); } finally { cv.endMark(); } }
+            case "pic" -> { cv.beginMark("X2PPic"); try { paintPicture(cv, obj, r); } finally { cv.endMark(); } }
             case "grpSp" -> paintGroup(cv, obj, r);
-            case "graphicFrame" -> paintFrame(cv, obj, r);
+            case "graphicFrame" -> { cv.beginMark("X2PFrame"); try { paintFrame(cv, obj, r); } finally { cv.endMark(); } }
             default -> { }
         }
     }
@@ -385,8 +398,9 @@ public final class DrawingPainter {
             Element ext = Xml.child(xfrm, "ext");
             chX = Xml.longAttr(chOff, "x", 0) / EMU;
             chY = Xml.longAttr(chOff, "y", 0) / EMU;
-            chW = Xml.longAttr(chExt, "cx", Xml.longAttr(ext, "cx", 1)) / EMU;
-            chH = Xml.longAttr(chExt, "cy", Xml.longAttr(ext, "cy", 1)) / EMU;
+            // chExt も ext もないときは、子の座標をそのまま使う (既定の 1 EMU で割ると子が約 1 万倍になる)
+            chW = chExt != null || ext != null ? Xml.longAttr(chExt, "cx", Xml.longAttr(ext, "cx", 1)) / EMU : r.getWidth();
+            chH = chExt != null || ext != null ? Xml.longAttr(chExt, "cy", Xml.longAttr(ext, "cy", 1)) / EMU : r.getHeight();
             rot = Xml.longAttr(xfrm, "rot", 0) / 60000.0;
             flipH = Xml.boolAttr(xfrm, "flipH", false);
             flipV = Xml.boolAttr(xfrm, "flipV", false);
@@ -397,7 +411,7 @@ public final class DrawingPainter {
         cv.save();
         applyRotFlip(cv, r, rot, flipH, flipV);
         Element grpFill = gp == null ? null : fillElement(gp);
-        for (Element child : Xml.resolveAlternate(g, Set.of("a14"))) {
+        for (Element child : Xml.resolveAlternate(g, ALT_SUPPORTED)) {
             String n = child.getLocalName();
             if (!(n.equals("sp") || n.equals("grpSp") || n.equals("pic") || n.equals("graphicFrame") || n.equals("cxnSp")))
                 continue;
@@ -409,9 +423,11 @@ public final class DrawingPainter {
             double x = Xml.longAttr(off, "x", 0) / EMU, y = Xml.longAttr(off, "y", 0) / EMU;
             double w = Xml.longAttr(ext, "cx", 0) / EMU, h = Xml.longAttr(ext, "cy", 0) / EMU;
             Rectangle2D cr = new Rectangle2D.Double(r.getX() + (x - chX) * sx, r.getY() + (y - chY) * sy, w * sx, h * sy);
+            int depth = cv.depth();
             try {
                 paintObject(cv, child, cr, grpFill);
-            } catch (RuntimeException e) {
+            } catch (IOException | RuntimeException e) {
+                cv.restoreTo(depth);   // 子の途中のクリップ・変換を戻す (同じグループの続きと後の図形に残さない)
                 Warnings.add("グループ内の図形を描けませんでした", e);
             }
         }

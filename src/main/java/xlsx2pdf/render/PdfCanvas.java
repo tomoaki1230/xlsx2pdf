@@ -66,6 +66,15 @@ public final class PdfCanvas implements AutoCloseable {
         cs.transform(new Matrix(1, 0, 0, -1, 0, h));
     }
 
+    /** -Dx2p.mark=true: 図形・画像・グラフを marked content で囲む (精度の内訳を測る開発用。既定は何もしない)。 */
+    static final boolean MARK = Boolean.getBoolean("x2p.mark");
+
+    /** MARK のとき、tag の marked content を始める。 */
+    public void beginMark(String tag) throws IOException { if (MARK) cs.beginMarkedContent(org.apache.pdfbox.cos.COSName.getPDFName(tag)); }
+
+    /** MARK のとき、marked content を終える。 */
+    public void endMark() throws IOException { if (MARK) cs.endMarkedContent(); }
+
     /** グラフィックス状態を保存する。 */
     public void save() throws IOException { cs.saveGraphicsState(); depth++; }
 
@@ -120,14 +129,18 @@ public final class PdfCanvas implements AutoCloseable {
 
     /** 矩形でクリップする。 */
     public void clipRect(double x, double y, double w, double h) throws IOException {
+        // NaN・無限大の範囲はコンテンツストリームに書かず、空の範囲で切り抜く (何も描かない)
+        if (!(Double.isFinite(x) && Double.isFinite(y) && Double.isFinite(w) && Double.isFinite(h))) { x = y = w = h = 0; }
         cs.addRect((float) x, (float) y, (float) w, (float) h);
         cs.clip();
     }
 
     /** 図形でクリップする。 */
     public void clip(Shape s) throws IOException {
+        if (!finite(s)) { clipRect(0, 0, 0, 0); return; }
         path(s);
-        cs.clip();
+        // 塗りと同じく、図形の規則 (even-odd なら穴を残す) で切り抜く
+        if (windingEvenOdd(s)) cs.clipEvenOdd(); else cs.clip();
     }
 
     /** 塗りと線の透明度を設定する (一度も透明度を使っていなければ不透明の設定は省く)。 */

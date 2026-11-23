@@ -1,4 +1,4 @@
-# この PC (Windows 11 + Office 2024 日本語版) にある書体名 (日本語名と英語名、正規化済み)。FontManager.installed が使う
+# Windows 11 + Office 2024 日本語版にある書体名 (日本語名と英語名、正規化済み)。FontManager.installed が使う
 agency fb
 alef
 algerian

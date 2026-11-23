@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 import org.apache.poi.openxml4j.opc.PackagePart;
 import org.w3c.dom.Element;
@@ -354,7 +353,7 @@ public final class ChartPainter {
                 g.type = "radar";
                 g.radarStyle = Xml.attr(Xml.child(e, "radarStyle"), "val", "marker");
             }
-            default -> { return null; }
+            default -> { Warnings.add("このグラフの種類 (" + n + ") は描けません", null); return null; }
         }
         g.grouping = Xml.attr(Xml.child(e, "grouping"), "val", g.type.equals("bar") ? "clustered" : "standard");
         if (g.type.equals("bar") && !g.grouping.equals("clustered") && Xml.child(e, "overlap") == null) g.overlap = 100;
@@ -1153,7 +1152,8 @@ public final class ChartPainter {
      * @param gap 目盛りの間隔の最小 (pt)。縦の軸は目盛ラベルの高さで決まる (Excel の印刷: 10pt の文字で 0〜7 を 1 刻み)
      */
     static void autoScale(Axis a, double dmin, double dmax, double lengthPt, double gap) {
-        if (Double.isInfinite(dmin)) { dmin = 0; dmax = 1; }
+        // データがない (初期値の無限大のまま) か、無限大・NaN を含む (--recalc の結果など) ときは 0〜1
+        if (!Double.isFinite(dmin) || !Double.isFinite(dmax)) { dmin = 0; dmax = 1; }
         if (a.logScale) {
             // 対数目盛: 底のべき乗で区切る (正の値だけを使う)
             double b = a.logBase;
@@ -1363,7 +1363,7 @@ public final class ChartPainter {
                 if (!horiz) right += lineH(vt2) + 4; else topSpace += lineH(vt2) + 4;
             }
             boolean valVisible = !valAx.deleted && !"none".equals(valAx.tickLblPos);
-            boolean catVisible = scatter ? !xValAx.deleted : catAx != null && !catAx.deleted && !"none".equals(catAx.tickLblPos);
+            boolean catVisible = scatter ? !xValAx.deleted && !"none".equals(xValAx.tickLblPos) : catAx != null && !catAx.deleted && !"none".equals(catAx.tickLblPos);
             if (!horiz) {
                 if (valVisible) {
                     double mw = 0;
@@ -1553,12 +1553,14 @@ public final class ChartPainter {
             }
         }
         if (scatter) {
-            DrawingPainter.LineStyle xg = xValAx.gridMajor ? gridDefault() : null;
+            // 縦の値の軸と同じく、目盛線の書式 (色・太さ・破線) を読む
+            DrawingPainter.LineStyle xg = xValAx.gridMajor ? dp.line(xValAx.gridSpPr == null ? null : Xml.child(xValAx.gridSpPr, "ln"), null, null) : null;
+            if (xValAx.gridMajor && xg == null && (xValAx.gridSpPr == null || Xml.child(xValAx.gridSpPr, "ln") == null)) xg = gridDefault();
             for (double v = xValAx.lo; v <= xValAx.hi + xValAx.unit * 1e-6; v = step(xValAx, v)) {
                 double p = plot.getX() + (v - xValAx.lo) / (xValAx.hi - xValAx.lo) * plot.getWidth();
                 if (xg != null) dp.strokeShape(cv, new Line2D.Double(p, plot.getY(), p, plot.getMaxY()), xg);
                 double ly = (scatterZeroInside(scatter, xValAx, valAx) ? valPos(valAx, 0, plot, false) + 3 : plot.getMaxY() + 3) + tickOut(xValAx);
-                if (!xValAx.deleted) text(cv, axisLabel(xValAx, v, "General"), p, ly, ct, 0, -1);
+                if (!xValAx.deleted && !"none".equals(xValAx.tickLblPos)) text(cv, axisLabel(xValAx, v, "General"), p, ly, ct, 0, -1);
             }
         }
 
@@ -1587,7 +1589,7 @@ public final class ChartPainter {
                 case "bar" -> paintBars(cv, gg, va, plot, nCats);
                 case "line" -> paintLines(cv, gg, va, plot, nCats, false);
                 case "area" -> paintLines(cv, gg, va, plot, nCats, true);
-                case "scatter" -> paintScatter(cv, gg, va, xValAx, plot);
+                case "scatter" -> paintScatter(cv, gg, va, xValAx, plot, nCats);
                 case "surface" -> paintSurface(cv, gg, va, plot, nCats);
                 default -> { }
             }
@@ -1782,7 +1784,7 @@ public final class ChartPainter {
                 double pos = 0, neg = 0;
                 for (Series s : gg.series) {
                     Double v = i < s.vals.size() ? s.vals.get(i) : null;
-                    if (v == null) continue;
+                    if (v == null || !Double.isFinite(v)) continue;   // 無限大・NaN が 1 つあっても、ほかの値で軸を決める
                     if (stacked) { if (v >= 0) pos += v; else neg += v; }
                     else { dmin = Math.min(dmin, v); dmax = Math.max(dmax, v); }
                 }
@@ -3507,8 +3509,35 @@ public final class ChartPainter {
         return p;
     }
 
-    /** 散布図を描く。 */
-    private void paintScatter(PdfCanvas cv, Group g, Axis yAx, Axis xAx, Rectangle2D plot) throws IOException {
+    /**
+     * 散布図を描く。xAx が null (縦棒・折れ線が主のグラフの第 2 軸に載せた散布図で、横の値の軸がない) なら、
+     * x の値を項目の番号 (1, 2, …) とみなして主の項目の位置に置く。
+     */
+    private void paintScatter(PdfCanvas cv, Group g, Axis yAx, Axis xAx, Rectangle2D plot, int nCats) throws IOException {
+        if (xAx == null) {
+            // この散布図が自分の横の値の軸 (axId) を持つなら、その軸を x の値の範囲で目盛る (主が棒・折れ線の第 2 軸の散布図)
+            for (Axis a : chartAxes) {
+                if (a != yAx && a.kind.equals("valAx") && g.axIds.contains(a.id) && (a.pos.equals("b") || a.pos.equals("t"))) { xAx = a; break; }
+            }
+            if (xAx != null && !(xAx.hi - xAx.lo > 0)) {
+                double mn = Double.POSITIVE_INFINITY, mx = Double.NEGATIVE_INFINITY;
+                for (Series s : g.series) for (int i = 0; i < s.vals.size(); i++) {
+                    double xv = i < s.xs.size() && s.xs.get(i) != null ? s.xs.get(i) : i + 1;
+                    if (Double.isFinite(xv)) { mn = Math.min(mn, xv); mx = Math.max(mx, xv); }
+                }
+                autoScale(xAx, mn, mx, plot.getWidth(), 28);
+            }
+        }
+        if (xAx == null) {
+            // 項目 1, 2, … の中心に x = 1, 2, … が来る仮の横の軸
+            int n = Math.max(1, nCats);
+            double c0 = catCenter(0, n, plot, false, false), step = n > 1 ? catCenter(1, n, plot, false, false) - c0 : plot.getWidth();
+            if (step == 0) step = plot.getWidth();
+            xAx = new Axis();
+            xAx.kind = "valAx";
+            xAx.lo = 1 - (c0 - plot.getX()) / step;
+            xAx.hi = xAx.lo + plot.getWidth() / step;
+        }
         boolean lines = !g.scatterStyle.equals("marker");
         for (int si = 0; si < g.series.size(); si++) {
             Series s = g.series.get(si);
@@ -3787,7 +3816,7 @@ public final class ChartPainter {
         // 旧来のスタイルは短い辺の 0.97 倍、それ以外は短い辺 − 7pt (短い辺 149pt で 140pt、85pt で 77pt)
         double side = Math.min(box.getWidth(), box.getHeight());
         double d = legacy ? side * LEGACY_PIE : Math.max(side * 0.5, side - PIE_INSET);
-        // データラベルを最適な位置・外側に置く円は、ラベルの場所を空けて小さくする (Excel の印刷の実測 2 件: 0.84 倍)
+        // データラベルを最適な位置・外側に置く円は、ラベルの場所を空けて小さくする (Excel の印刷の実測で 0.84 倍)
         if (outsideLabels(g, s)) d *= PIE_LABEL_SHRINK;
         // 切り離し (explosion %): 最も離れる扇が元の円に収まるよう、直径を 1 / (1 + 最大の割合) にする
         double emax = 0;
@@ -4093,9 +4122,4 @@ public final class ChartPainter {
 
     /** 引き出し線の、ラベルの手前の横の部分の長さ (pt)。 */
     private static final double LEADER_ELBOW = 5;
-
-    /** 数値を小数 2 桁の文字列にする (デバッグ用)。 */
-    static String fmt(double d) {
-        return String.format(Locale.ROOT, "%.2f", d);
-    }
 }

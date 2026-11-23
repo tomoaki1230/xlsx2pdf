@@ -189,8 +189,10 @@ final class EmfRenderer {
             case 25 -> st.bkColor = color(i32(p + 8));                        // SETBKCOLOR
             case 33 -> saved.push(st.clone());                                // SAVEDC
             case 34 -> {                                                      // RESTOREDC
+                // 負は相対 (-1 = 直前の保存、-n は n 個戻る)、正は絶対 (n 番目の保存。1 始まり) の位置まで戻る
                 int n = i32(p + 8);
-                for (int k = 0; k < (n < 0 ? -n : 1) && !saved.isEmpty(); k++) st = saved.pop();
+                int pops = n < 0 ? -n : saved.size() - (n - 1);
+                for (int k = 0; k < pops && !saved.isEmpty(); k++) st = saved.pop();
                 applyClip();
             }
             case 35 -> st.world = xform(p + 8);                               // SETWORLDTRANSFORM

@@ -144,7 +144,10 @@ public final class Sparklines {
         if (sh == null) return out;
         int r0 = Math.min(a.getRow(), b.getRow()), r1 = Math.max(a.getRow(), b.getRow());
         int c0 = Math.min(a.getCol(), b.getCol()), c1 = Math.max(a.getCol(), b.getCol());
-        if ((long) (r1 - r0 + 1) * (c1 - c0 + 1) > 100_000) return out;
+        if ((long) (r1 - r0 + 1) * (c1 - c0 + 1) > 100_000) {
+            Warnings.add("スパークラインのデータの範囲 " + ref + " が大きすぎる (10 万セル超) ため、描きませんでした", null);
+            return out;
+        }
         for (int r = r0; r <= r1; r++) {
             Row row = sh.getRow(r);
             for (int c = c0; c <= c1; c++) {
@@ -235,8 +238,8 @@ public final class Sparklines {
                 Color mc = null;
                 if (g.markers) mc = g.mark;
                 if (g.negative && v < 0) mc = g.neg;
-                if (g.first && i == 0) mc = g.cFirst;
-                if (g.last && i == n - 1) mc = g.cLast;
+                if (g.first && i == firstIndex(g, n)) mc = g.cFirst;
+                if (g.last && i == lastIndex(g, n)) mc = g.cLast;
                 if (g.low && i == iMin) mc = g.cLow;
                 if (g.high && i == iMax) mc = g.cHigh;
                 if (mc == null) continue;
@@ -253,10 +256,16 @@ public final class Sparklines {
     private static Color pointColor(Group g, int i, int n, double v, int iMin, int iMax, Color dflt) {
         if (g.high && i == iMax) return g.cHigh;
         if (g.low && i == iMin) return g.cLow;
-        if (g.first && i == 0) return g.cFirst;
-        if (g.last && i == n - 1) return g.cLast;
+        if (g.first && i == firstIndex(g, n)) return g.cFirst;
+        if (g.last && i == lastIndex(g, n)) return g.cLast;
         return dflt;
     }
+
+    /** 最初の点の位置 (右から左のときは並びを反転して描くので、元の最初の点は右端)。 */
+    private static int firstIndex(Group g, int n) { return g.rtl ? n - 1 : 0; }
+
+    /** 最後の点の位置。 */
+    private static int lastIndex(Group g, int n) { return g.rtl ? 0 : n - 1; }
 
     /** グループで共通の最小・最大。 */
     private static void groupRange(Group g) {

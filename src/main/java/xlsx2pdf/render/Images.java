@@ -133,6 +133,7 @@ public final class Images {
             if (isMetafile(data, name)) {
                 BufferedImage bi = renderMetafile(data, name, wPt, hPt, ctx.fonts);
                 if (bi != null) img = LosslessFactory.createFromImage(ctx.doc, bi);
+                else Warnings.add("画像「" + name + "」(EMF・WMF) を変換できませんでした", null);
             } else if (data.length > 3 && (data[0] & 255) == 0xFF && (data[1] & 255) == 0xD8) {
                 // JPEG はそのまま埋め込む。PDFBox が読めない JPEG (CMYK など) は RGB に変換して埋め込み直す
                 int[] wh = headerSize(data);

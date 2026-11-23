@@ -38,7 +38,7 @@ public final class CellPainter {
     /** 上・下の余白。 */
     static final double PAD_TOP = 0.6;
     static final double PAD_BOTTOM = 0.84;
-    /** 既定の動きの倍率 100% の左右の余白 (pt)。列幅の丸め の後に掃引し直した値。 */
+    /** 既定の動きの倍率 100% の左右の余白 (pt)。実測に合わせた値。 */
     static final double POSM_PAD100_MODERN = 1.9;
     /** 縮小したときの左右の余白の下限 (用紙の pt)。 */
     static final double POSM_PADMIN = 0.85;
@@ -85,6 +85,8 @@ public final class CellPainter {
     private boolean cellRich;
     /** 描いているセルが折り返しの設定か。 */
     private boolean cellWrap;
+    /** 折り返して配置するか (折り返しの設定に加え、横の両端揃え・均等割り付けなども折り返す)。 */
+    private boolean cellWrapLayout;
 
     /** これから描くブロックのページ上の配置 (ox、oy は用紙上の左上、sx、sy はそのシートの座標)。 */
     public void setBlockPlacement(double ox, double oy, double sx, double sy) {
@@ -108,14 +110,68 @@ public final class CellPainter {
             for (CTCol c : cols.getColArray()) {
                 if (!c.isSetStyle() || c.getStyle() == 0) continue;
                 XSSFCellStyle st = ctx.wb.getCellStyleAt((int) c.getStyle());
-                for (long i = c.getMin() - 1; i < Math.min(c.getMax(), L.maxCol); i++) colStyles[(int) i] = st;
+                for (long i = Math.max(1, c.getMin()) - 1; i < Math.min(c.getMax(), L.maxCol); i++) colStyles[(int) i] = st;   // min="0" などの不正な値で負の添字にしない
             }
         }
     }
 
     private double sheetDescentPt = -1;
 
+    /** 下揃えの文字を置く行 (結合セルは最後の行)。{@link #rowDescent} に使う。 */
+    private int textBottomRow = -1;
+    private final java.util.Map<Integer, Double> rowDescentPt = new java.util.HashMap<>();
+
+    /**
+     * 行の下揃えのセル (文字のない書式だけのセルも含む。縦の配置が下・指定なしで回転なし) のフォントのディセントの最大 (pt)。
+     * Excel は行の下揃えの文字を共通の基線に置き、その基線は行の中で一番ディセントの大きい書体で決まる (例: 同じ行に
+     * メイリオ 11 の下揃えのセルがあると、ＭＳ Ｐゴシック 11 の文字は約 4pt 上がる。中央・上揃えのセルは関係しない)。
+     */
+    private double descentPt(XSSFFont f) {
+        return ctx.fonts.spec(f.getFontName(), false, false).descent * (f.getFontHeight() / 20.0);
+    }
+
+    private double rowDescent(int r) {
+        if (r < 0) return 0;
+        Double v = rowDescentPt.get(r);
+        if (v != null) return v;
+        double m = 0;
+        var row = sheet.getRow(r);
+        if (row != null) for (var cl : row) {
+            if (!(cl.getCellStyle() instanceof XSSFCellStyle st)) continue;
+            Align a = align(st);
+            if (a.rotation() != 0 || (a.v() != VerticalAlignment.BOTTOM && a.v() != null)) continue;
+            XSSFFont f = st.getFont();
+            if (f == null) continue;
+            m = Math.max(m, descentPt(f));
+        }
+        rowDescentPt.put(r, m);
+        return m;
+    }
+
     /** シートの標準行を決めるフォントのディセントの最大 (pt)。 */
+
+    /** 画面 (96 dpi) の整数の画素に丸めたディセント (pt): round(ディセント (em) × round(大きさ × 4/3)) × 0.75。 */
+    private double screenDescPt(String font, double size) {
+        return Math.round(ctx.fonts.spec(font, false, false).descent * Math.round(size * 4 / 3.0)) * 0.75;
+    }
+
+    /** 画面の 1 画素の差を、プリンタの何画素として数えるか (6.25 ではなく約 7.25。14〜24pt で実測)。 */
+    static final double SCR_STEP = 7.25 / 6.25;
+
+    /** 行の標準のフォントのディセント (pt)。書式のある行 (row の customFormat と s) で書式のフォントが日本語の名前の書体ならそのフォント、ほかはシートの標準行のフォント。 */
+    private double baseDescent(int r) {
+        var row = r >= 0 ? sheet.getRow(r) : null;
+        if (row != null && row.getCTRow().isSetCustomFormat() && row.getCTRow().getCustomFormat() && row.getCTRow().isSetS()) {
+            long si = row.getCTRow().getS();
+            if (si >= 0 && si < sheet.getWorkbook().getNumCellStyles()) {
+                XSSFFont f = sheet.getWorkbook().getCellStyleAt((int) si).getFont();
+                // 欧文の書体 (Century など) の書式の行は、シートの標準行のフォントのまま
+                if (f != null && f.getFontName() != null && !f.getFontName().chars().allMatch(ch -> ch < 0x80)) return descentPt(f);
+            }
+        }
+        return sheetDescent();
+    }
+
     private double sheetDescent() {
         if (sheetDescentPt < 0) {
             double m = 0;
@@ -151,6 +207,12 @@ public final class CellPainter {
 
     /** 結合セルの縦の中央揃えの文字を、結合していないセルより上へ動かす量 (プリンタの画素)。 */
     static final double MERGE_CENTER_PX = 4.0;
+
+    /** 縦書きの中央揃えの文字を、セルの中央より下へ動かす量 (プリンタの画素)。 */
+    static final double STACK_CENTER_PX = 5.0;
+
+    /** 結合セルの折り返しの下揃えの文字を、結合していないセルより上へ動かす最小の量 (プリンタの画素)。 */
+    static final double MERGE_WRAP_BOTTOM_PX = 6.0;
 
     double centerDy() { return posx() ? (5 - lineOff()) * 0.12 / Math.max(0.1, L.scale) : 0; }
 
@@ -192,7 +254,7 @@ public final class CellPainter {
             double tw0 = totalWidth(runs);
             if (tw0 > 0) {
                 long pr = (long) Math.floor(ppem0 * (w - padL - padR) / tw0 + 1e-9);
-                k0 = (int) Math.max(1, ppem0 - pr);
+                k0 = (int) Math.max(1, Math.min(ppem0 - 1, ppem0 - pr));   // 使える幅が 0 以下でも 1 ppem までは縮める
             }
         }
         for (int k = k0; k < 2000; k++) {
@@ -903,15 +965,30 @@ public final class CellPainter {
     }
 
     /**
-     * 優先度の高いほうの罫線。同じ太さなら後のセル (下・右) の罫線。
+     * 優先度の高いほうの罫線。同じ太さなら暗い色、同じ明るさなら後のセル (下・右) の罫線。
      */
     private static Edge better(Edge a, Edge b) {
         if (a == null) return b;
         if (b == null) return a;
+        // 条件付き書式で消した辺は、隣のセルの罫線より優先する
+        if (a.cleared()) return a;
+        if (b.cleared()) return b;
+        // セル (条件付き書式を含む) の罫線は、隣のセルの表のスタイルの罫線より優先する (太さによらない。Excel の実測)
+        if (a.table() != b.table()) return a.table() ? b : a;
         int wa = weight(a.style()), wb = weight(b.style());
-        if (wb == wa) return b;
+        if (wb == wa) {
+            // 同じ太さなら暗い色 (輝度の低い色。位置によらない。黒 > 灰色、青 > 赤 > 薄い灰色)。同じ明るさなら後のセル
+            if (a.color() != null && b.color() != null) {
+                int la = luma(a.color()), lb = luma(b.color());
+                if (la != lb) return la < lb ? a : b;
+            }
+            return b;
+        }
         return wb > wa ? b : a;
     }
+
+
+    private static int luma(Color c) { return 299 * c.getRed() + 587 * c.getGreen() + 114 * c.getBlue(); }
 
     /** 罫線を描く。隣り合うセルの辺をまとめ、同じ罫線が続く区間を 1 本の線にする。 */
     private void paintBorders(PdfCanvas cv, Paginator.Segment s) throws IOException {
@@ -972,21 +1049,21 @@ public final class CellPainter {
                     slantEdges(cst, cf.eval(r, c), r, c, sl, diagonals, diagEdges);
             }
         }
-        // ブロックの外周の罫線は、印刷範囲の外の隣のセルのものでもよい (印刷範囲の次の列の左罫線など)。Excel は
-        // それも印刷するが、印刷範囲内の改ページの向こう側のセルの罫線は印刷しない
+        // 印刷範囲がなければ、ブロックの外周の罫線は隣のセルのものでもよい。印刷範囲があると、Excel は範囲の外のセルの
+        // 罫線を描かない。印刷範囲内の改ページの向こう側のセルの罫線も印刷しない
         CellRangeAddress a = s.area;
         for (int c = s.c0; c <= s.c1; c++) {
             if (L.cw(c) <= 0) continue;
             int j = c - s.c0;
-            if (s.r0 > 0 && (a == null || s.r0 - 1 < a.getFirstRow())) hz[0][j] = better(neighbour(s.r0 - 1, c, 2), hz[0][j]);   // 同じ太さなら下 (ブロックの中) のセル
-            if (a == null || s.r1 + 1 > a.getLastRow()) hz[nr][j] = better(hz[nr][j], neighbour(s.r1 + 1, c, 0));
+            if (s.r0 > 0 && a == null) hz[0][j] = better(neighbour(s.r0 - 1, c, 2), hz[0][j]);   // 同じ太さなら下 (ブロックの中) のセル
+            if (a == null) hz[nr][j] = better(hz[nr][j], neighbour(s.r1 + 1, c, 0));
         }
         for (int r = s.r0; r <= s.r1; r++) {
             ctx.checkDeadline();
             if (L.rh(r) <= 0) continue;
             int i = r - s.r0;
-            if (s.c0 > 0 && (a == null || s.c0 - 1 < a.getFirstColumn())) vt[i][0] = better(neighbour(r, s.c0 - 1, 1), vt[i][0]);   // 同じ太さなら右 (ブロックの中) のセル
-            if (a == null || s.c1 + 1 > a.getLastColumn()) vt[i][nc] = better(vt[i][nc], neighbour(r, s.c1 + 1, 3));
+            if (s.c0 > 0 && a == null) vt[i][0] = better(neighbour(r, s.c0 - 1, 1), vt[i][0]);   // 同じ太さなら右 (ブロックの中) のセル
+            if (a == null) vt[i][nc] = better(vt[i][nc], neighbour(r, s.c1 + 1, 3));
         }
         // 「選択範囲内で中央」でつながった範囲 (文字のあるセルと、それに続く同じ配置の空のセル) は、結合セルと同様に
         // 内側の縦罫線を描かない
@@ -1000,6 +1077,9 @@ public final class CellPainter {
         }
         for (int i = 0; i < nr && !overflowEdges.isEmpty(); i++)
             for (int j = 0; j <= nc; j++) if (overflowEdges.contains((s.r0 + i) * 100000L + s.c0 + j)) vt[i][j] = null;
+        // 条件付き書式で消した辺は描かない
+        for (Edge[] row : hz) for (int j = 0; j < row.length; j++) if (row[j] != null && row[j].cleared()) row[j] = null;
+        for (Edge[] row : vt) for (int j = 0; j < row.length; j++) if (row[j] != null && row[j].cleared()) row[j] = null;
         // 横線 (同じ罫線が続く区間ごと)
         for (int i = 0; i <= nr; i++) {
             int r = s.r0 + i;
@@ -1517,6 +1597,22 @@ public final class CellPainter {
      * @param m 結合範囲 (なければ null)
      */
     private void paintCellText(PdfCanvas cv, Paginator.Segment s, XSSFCell cell, CellRangeAddress m) throws IOException {
+        if (cv == null || !PdfCanvas.MARK) { paintCellText0(cv, s, cell, m); return; }
+        // -Dx2p.mark=true: セルの属性をタグ名にして囲む (精度の内訳を測る開発用)
+        XSSFCellStyle st = cell.getCellStyle();
+        Align a = align(st);
+        XSSFFont f = st.getFont();
+        boolean rich = cell.getCellType() == CellType.STRING && cell.getRichStringCellValue().numFormattingRuns() > 1;
+        String tag = "X2PC_" + a.h() + "_" + a.v() + "_w" + (a.wrap() ? 1 : 0) + "_r" + a.rotation() + "_i" + a.indent() + "_s" + (a.shrink() ? 1 : 0)
+                + "_m" + (m == null ? "0" : (m.getLastRow() - m.getFirstRow() + 1) + "x" + (m.getLastColumn() - m.getFirstColumn() + 1))
+                + "_t" + cell.getCellType() + "_R" + (rich ? 1 : 0) + "_z" + f.getFontHeightInPoints()
+                + "_H" + (cell.getRow().getCTRow().isSetCustomHeight() && cell.getRow().getCTRow().getCustomHeight() ? 1 : 0)
+                + "_F" + String.valueOf(f.getFontName()).replaceAll("[^\\p{L}\\p{N}]", "");
+        cv.beginMark(tag);
+        try { paintCellText0(cv, s, cell, m); } finally { cv.endMark(); }
+    }
+
+    private void paintCellText0(PdfCanvas cv, Paginator.Segment s, XSSFCell cell, CellRangeAddress m) throws IOException {
         int r = cell.getRowIndex(), c = cell.getColumnIndex();
         // 前のセルのアイコンの待ちを持ち越さない (はみ出しを調べる段階は描く前に抜けるので残る)
         pendingIcon = null;
@@ -1543,7 +1639,8 @@ public final class CellPainter {
         boolean emptyIcon = vr.text.isEmpty() && cfr != null && cfr.icon != null && !bw() && cv != null;
         if (vr.text.isEmpty() && !emptyIcon) return;
         if (emptyIcon) vr.text = "0";
-        if (cfr != null && cfr.hideText) return;
+        // データバーの「棒のみ表示」は文字を描かない (同じセルのアイコンは描く)
+        if (cfr != null && cfr.hideText && (cfr.icon == null || bw())) return;
         XSSFFont font = st.getFont();
         padFont = font;
         stackedText = align(st).rotation() == 255;
@@ -1567,7 +1664,7 @@ public final class CellPainter {
             iconSize = size;
             x0 += off + size;
             w = Math.max(0, w - off - size);
-            suppressText = icon.iconOnly() || emptyIcon;
+            suppressText = icon.iconOnly() || emptyIcon || cfr.hideText;
         }
 
         Align al = align(st);
@@ -1580,6 +1677,7 @@ public final class CellPainter {
         }
         spaceEnds = al.spaceEnds();
         mergedText = m != null;
+        textBottomRow = m != null ? m.getLastRow() : r;
         cellWrap = align(st).wrap();
         HorizontalAlignment ha = al.h();
         VerticalAlignment va = al.v();
@@ -1599,6 +1697,7 @@ public final class CellPainter {
         if (ps.rtl && !measuringRange) ha = ha == HorizontalAlignment.LEFT ? HorizontalAlignment.RIGHT : ha == HorizontalAlignment.RIGHT ? HorizontalAlignment.LEFT : ha;
         boolean wrap = al.wrap() || ha == HorizontalAlignment.JUSTIFY || ha == HorizontalAlignment.DISTRIBUTED
                 || va == VerticalAlignment.JUSTIFY || va == VerticalAlignment.DISTRIBUTED;
+        cellWrapLayout = wrap;
         int rot = al.rotation();
         boolean vertical = rot == 255;
         double angle = 0;
@@ -1606,12 +1705,14 @@ public final class CellPainter {
         rotWrap = wrap && angle != 0;
         if (angle != 0 || vertical) wrap = wrap && vertical;
         int indent = al.indent();
-        // 字下げ 1 段の幅。paper: 用紙上で一定 (印刷倍率で縮めない。数字幅 × 1.5 × 1.125 の画面ピクセル相当)
+        // 字下げ 1 段の幅。paper: 用紙上で一定 (印刷倍率で縮めない。標準フォントの空白 3 つ分。RenderContext.indentStepPt)
         // ただし倍率 50% 未満では用紙上で一定にせず倍率で縮める
         boolean paper = L.scale >= INDENT_PAPER_MIN_SCALE;
-        double indentPt = paper ? indent * ctx.mdw * 1.5 * 1.125 * SheetLayout.PX / L.scale
-                : indent * ctx.mdw * 1.5 * 1.125 * SheetLayout.PX;
+        double indentPt = paper ? indent * ctx.indentStepPt / L.scale : indent * ctx.indentStepPt;
         boolean shrink = al.shrink() && !wrap;
+        // 繰り返し文字 (*) のある書式は、右揃えで折り返すセルでは繰り返さず、普通の文字として配置する
+        // (右揃えは末尾の _ の空白を除いてセルの右に寄る)
+        if (vr.fillChar != null && al.wrap() && ha == HorizontalAlignment.RIGHT) vr.fillChar = null;
 
         cellRich = vr.rich != null;
         runLook = tables.look(r, c);
@@ -1657,7 +1758,10 @@ public final class CellPainter {
                     // Excel は # をセルの配置によらず中央揃えで置き、個数は左右の余白に合わせて 2 画素はみ出してよい
                     float hw = runs.get(0).spec.width("#", runs.get(0).size, ctx.fonts);
                     // セルが # 1 つより狭くても、Excel は # を 1 つ描く
-                    int n = hw > 0 ? Math.max(1, (int) Math.floor((availW + HASH_OVER_PX * 0.12 / Math.max(0.1, L.scale) + 1e-6) / hw)) : 0;
+                    // 会計・円などの繰り返し文字 (*) のある書式は、# が 1 つも入らない狭い列では何も描かない (Excel の動き)
+                    boolean repeatFmt = vr.fillChar != null;
+                    int n = hw > 0 ? (int) Math.floor((availW + HASH_OVER_PX * 0.12 / Math.max(0.1, L.scale) + 1e-6) / hw) : 0;
+                    if (!repeatFmt) n = Math.max(1, n);
                     fitted = n > 0 ? fractionHashes(vr.text, n) : "";
                     vr.fillChar = null;
                     ha = HorizontalAlignment.CENTER;
@@ -1802,6 +1906,7 @@ public final class CellPainter {
             // 折り返しの右の余白は 2 画素小さい (Excel の折り返した行は使える幅を 2 画素まで超える。右揃えの位置も同じ)
             double wrapW = posx() && cellWrap && wrap ? availW + 2 * 0.12 / Math.max(0.1, L.scale) : availW;
             List<TextLayout.Line> lines = TextLayout.layout(runs, (float) wrapW, wrap, wrap, ctx.fonts);
+            newlineHeights(lines);
             phon = vr.fillChar == null ? phonetic(cell, cfr) : null;
             try {
                 paintLines(cv, lines, x0, y0, w, h, ha, va, padL, padR, runs.get(0));
@@ -1917,14 +2022,17 @@ public final class CellPainter {
      * (h + floor((h+4)/10) + 1 デバイス px)。折り返した行の組 約 9000 で実測。
      */
     private double pitch(TextLayout.Line l) {
+        if (l.runs.isEmpty() && l.newlineRun != null && !L.model().authorEnv) {
+            double bp = L.linePitch(l.newlineRun.spec.requested, l.newlineRun.size);
+            if (bp > 0) return bp;
+        }
         // 空行の送りも、その行のフォントの行送り
         if (l.runs.isEmpty() && l.blankBase != null && !L.model().authorEnv) {
             double bp = L.linePitch(l.blankBase.spec.requested, l.blankBase.size);
             if (bp > 0) return bp;
         }
         if (l.runs.isEmpty()) return (l.ascent + l.descent) * LINE_FACTOR;
-        TextLayout.Run big = l.runs.get(0);
-        for (TextLayout.Run r : l.runs) if (r.size > big.size) big = r;
+        TextLayout.Run big = bigRun(l);
         double p = L.linePitch(big.spec.requested, big.size);
         // 書式付き文字列の行送りは、小さいランだけの行でもセルのフォントの行送り以上
         return p > 0 ? p : (l.ascent + l.descent) * LINE_FACTOR;
@@ -2042,12 +2150,56 @@ public final class CellPainter {
     /** 折り返した最後の行の高さ (画素): round((100% の文字の高さ + 10) × 倍率)。 */
     private long lastLinePx(TextLayout.Line l, double u, double sc) {
         if (!l.runs.isEmpty()) {
-            TextLayout.Run big = l.runs.get(0);
-            for (TextLayout.Run r : l.runs) if (r.size > big.size) big = r;
+            TextLayout.Run big = bigRun(l);
             int[] ad = FontCalc.ascentDescent(big.spec.requested, (int) Math.round(rawPt(big) * 600 / 72));
             if (ad != null) return Math.round((ad[0] + ad[1] + 10) * sc);
         }
         return Math.round(pitch(l) / u);
+    }
+
+    /**
+     * 行の高さを決める最大のラン (文字のある行のみ)。Excel のセルでは行を終える改行文字の書式も数える (大きい
+     * 改行文字の行は高くなり、空行の高さはその空行を終える改行文字の書式)。
+     */
+    private TextLayout.Run bigRun(TextLayout.Line l) {
+        TextLayout.Run big = l.runs.get(0);
+        for (TextLayout.Run r : l.runs) if (r.size > big.size) big = r;
+        // 改行文字の書式は、行が高くなるときだけ (大きさではなく行送りで比べる。游ゴシック 10pt の行の HG丸ゴシック 12pt の改行は効かない)
+        if (l.newlineRun != null && runPitch(l.newlineRun) > runPitch(big)) big = l.newlineRun;
+        return big;
+    }
+
+    /** ランの行送り (比べる用。求められなければ大きさ)。 */
+    private double runPitch(TextLayout.Run r) {
+        double p = posx() ? L.linePitch(r.spec.requested, r.size) : 0;
+        return p > 0 ? p : r.size * 1.2;
+    }
+
+    /**
+     * 行のアセント・ディセントに、行を終える改行文字の書式を入れる (空行はその書式だけ。末尾の空行は前の改行の書式)。
+     * {@link #bigRun} と同じ規則。
+     */
+    private void newlineHeights(List<TextLayout.Line> lines) {
+        for (int i = 0; i < lines.size(); i++) {
+            TextLayout.Line l = lines.get(i);
+            TextLayout.Run n = l.newlineRun;
+            // 末尾の改行の後の最後の空行は、前の行と同じ高さ (前の行の高さを決めるラン。前の行も空行ならその改行の書式)
+            if (n == null && i > 0 && i == lines.size() - 1 && l.runs.isEmpty()) {
+                TextLayout.Line p = lines.get(i - 1);
+                n = p.runs.isEmpty() ? p.newlineRun : bigRun(p);
+            }
+            if (n == null) continue;
+            float a = (float) (n.spec.ascent * n.size), d = (float) (n.spec.descent * n.size);
+            if (l.runs.isEmpty()) { l.blankBase = n; l.ascent = a; l.descent = d; }
+            else if (bigRun(l) == n) { l.ascent = Math.max(l.ascent, a); l.descent = Math.max(l.descent, d); }
+        }
+    }
+
+    /** メイリオ・Meiryo UI・Yu Gothic UI (winAscent が大きく、typo の行間を持つ書体)。 */
+    static boolean uiTallFont(String font) {
+        if (font == null) return false;
+        String n = FontManager.norm(font).replace(" ", "");
+        return n.startsWith("メイリオ") || n.startsWith("meiryo") || n.startsWith("yugothicui");
     }
 
     /** ランの大きさ (実体化の前の pt。0.5pt 刻みに丸める)。 */
@@ -2077,8 +2229,7 @@ public final class CellPainter {
         long ht = b - t;
         long a = Math.round(l.ascent / u), d = Math.round(l.descent / u);
         if (!l.runs.isEmpty()) {
-            TextLayout.Run big = l.runs.get(0);
-            for (TextLayout.Run r : l.runs) if (r.size > big.size) big = r;
+            TextLayout.Run big = bigRun(l);
             int[] ad = FontCalc.ascentDescent(big.spec.requested, (int) Math.round(big.size / u));
             if (ad != null) { a = ad[0]; d = ad[1]; }
         }
@@ -2104,14 +2255,23 @@ public final class CellPainter {
             long tp = Math.min(6, Math.max(0, lp - fh));
             // 折り返しの基線の位置: round((100% のアセント + 2.4) × 倍率 + 4)
             if (!l.runs.isEmpty()) {
-                TextLayout.Run big = l.runs.get(0);
-                for (TextLayout.Run r : l.runs) if (r.size > big.size) big = r;
+                TextLayout.Run big = bigRun(l);
                 int[] a0 = FontCalc.ascentDescent(big.spec.requested, (int) Math.round(rawPt(big) * 600 / 72));
                 if (a0 != null) tp = Math.round((a0[0] + 2.4) * sc + 4) - a;
             }
             off = va == VerticalAlignment.TOP ? tp : (ht - total) / 2 + tp;
         }
         if (va == VerticalAlignment.CENTER && mergedText) off -= (long) MERGE_CENTER_PX;
+        // メイリオ・Meiryo UI・Yu Gothic UI の上・中央揃えは、Excel の方が上 (
+        // 上揃えは折り返しなしで 2 画素、折り返しで round(2 × 倍率)。中央揃えは 2 + floor(2 × 倍率 + 0.3)、折り返しで 1 + round(2.5 × 倍率))
+        if (!l.runs.isEmpty() && uiTallFont(bigRun(l).spec.requested)) {
+            if (va == VerticalAlignment.TOP) off -= cellWrap ? Math.round(2 * sc) : 2;
+            else off -= cellWrap ? 1 + Math.round(2.5 * sc) : 2 + (long) Math.floor(2 * sc + 0.3);
+        }
+        if (va == VerticalAlignment.TOP && !l.runs.isEmpty()) {
+            TextLayout.Run big = bigRun(l);
+            off += FontCalc.topExtraPx(big.spec.requested, (int) Math.round(big.size / u));
+        }
         return ((t + off) * 0.12 - org) / sc + extraAscent;
     }
 
@@ -2132,6 +2292,8 @@ public final class CellPainter {
         // わずかなはみ出しは配置どおり (実ファイルの様式は行の見積もりの差で収まらない側に出ることがある)
         if (mergedText && lines.size() > 1 && total > h - padTop() - padBottom() + pitch(lines.get(0)))
             va = va == VerticalAlignment.JUSTIFY || va == VerticalAlignment.DISTRIBUTED ? VerticalAlignment.JUSTIFY : VerticalAlignment.TOP;
+        // 縦の均等割り付けの 1 行は中央揃えと同じ位置 (結合セルで書体によらず中央揃えの補正の分 3 画素、単独で 1 画素の違いになる)
+        if (va == VerticalAlignment.DISTRIBUTED && lines.size() == 1) va = VerticalAlignment.CENTER;
         int phonPos = 0;
         double top;
         double gap = 0;
@@ -2155,7 +2317,35 @@ public final class CellPainter {
                 top = y0 + h - padBottom() - total;
                 // 下揃えの基線は、シートの標準行を決めるフォントのディセントにも左右される
                 if (posx() && !lines.isEmpty()) {
-                    top -= Math.max(0, sheetDescent() - lines.get(lines.size() - 1).descent);
+                    double sd = Math.max(0, baseDescent(textBottomRow) - lines.get(lines.size() - 1).descent);
+                    // 同じ行のディセントの大きい下揃えのセルの分 (行の最大と自分の書体を同じ求め方で比べる)
+                    if (padFont != null)
+                        sd = Math.max(sd, rowDescent(textBottomRow) - descentPt(padFont));
+                    // ＭＳ 系の書体で標準フォントも ＭＳ 系のブック: Excel の下揃えのディセントは、標準フォントのディセント (画面 (96 dpi) の
+                    // 整数の画素で丸めた値との差が 0.5 画素以内ならその値、ほかは丸めない値。標準 6・7.5・8pt のブックは丸めない) + 画面の画素で数えたディセントの標準フォントとの差 (
+                    // 標準 11pt のブックは 12.5 画素、標準 8pt は 9.4 画素。14pt は標準 11pt より 1 画面画素大きい)。小さくなるときは下げる
+                    // シートの標準行・同じ行のセルのディセントが、セルと標準フォントの大きい方を超える行と、行のディセントがほかの書体のラン
+                    // (記号の書体など) で大きくなっている行は除く
+                    double ld = lines.get(lines.size() - 1).descent;
+                    if (padFont != null && PrinterModel.isMs(FontManager.norm(padFont.getFontName()))
+                            && PrinterModel.isMs(FontManager.norm(ctx.defaultFontName)) && Math.abs(ld - descentPt(padFont)) < 0.02) {
+                        double own = descentPt(padFont), std = ctx.fonts.spec(ctx.defaultFontName, false, false).descent * ctx.defaultFontSize;
+                        double gov = Math.max(own, std);
+                        if (baseDescent(textBottomRow) <= gov + 1e-9 && rowDescent(textBottomRow) <= gov + 1e-9) {
+                            double stdScr = screenDescPt(ctx.defaultFontName, ctx.defaultFontSize);
+                            sd = (Math.abs(stdScr - std) <= 0.06 ? stdScr : std) + Math.max(0, screenDescPt(padFont.getFontName(), padFont.getFontHeight() / 20.0) - stdScr) * SCR_STEP - ld;
+                        }
+                    }
+                    // 結合セルの折り返し (均等割り付けなど折り返す配置を含む)・リッチテキストは、少なくとも MERGE_WRAP_BOTTOM_PX 上
+                    // (標準フォントによらず 0.56〜0.88pt。リッチテキスト・均等割り付けは折り返しの設定なしでも同じ)
+                    double sdDesc = sd;
+                    if (mergedText && (cellWrapLayout || cellRich)) sd = Math.max(sd, MERGE_WRAP_BOTTOM_PX * 0.12 / Math.max(0.1, L.scale));
+                    // 行に thickBot (太い下罫線の印) があると、Excel は下揃えの文字を 8 画素 (倍率で縮む。0.96pt × 倍率) 上に置く (
+                    // 罫線の太さではなく行の印で決まる)。結合セルの折り返しの持ち上げとは足さずに大きい方。
+                    // 標準フォントが ＭＳ 系のブックだけ (游ゴシックのブックでは合わない)
+                    if (PrinterModel.isMs(FontManager.norm(ctx.defaultFontName)) && textBottomRow >= 0 && sheet.getRow(textBottomRow) != null && sheet.getRow(textBottomRow).getCTRow().isSetThickBot()
+                            && sheet.getRow(textBottomRow).getCTRow().getThickBot()) sd = Math.max(sd, sdDesc + 8 * 0.12);
+                    top -= sd;
                 }
             }
         }
@@ -2190,7 +2380,8 @@ public final class CellPainter {
                         x = x0 + (w - l.width) / 2;
                     } else {
                         x = x0 + padL;
-                        extra = (float) Math.max(0, availW - l.width);
+                        // 右端は使える幅の 2 画素先まで (書体・倍率によらない。両端揃えと同じ)
+                        extra = (float) Math.max(0, availW + (posx() ? 2 * 0.12 / Math.max(0.1, L.scale) : 0) - l.width);
                         mode = 2;
                         if (spaceEnds) {
                             // 「前後にスペースを入れる」(justifyLastLine) の均等割り付けは、余りを (文字数 + 1) 等分して
@@ -2208,6 +2399,14 @@ public final class CellPainter {
             // 文字の始まりは整数の画素 (奇数の線幅のシートではセルの境界に 0.5 画素の端数がある)
             if (posx()) {
                 double sc = Math.max(0.01, L.scale), org = blockOx - blockSx * sc;
+                if (ha == HorizontalAlignment.CENTER && newLayout() && sc != 1) {
+                    // 中央揃え: セルの左右の端を先に画素に丸めてから、(幅 − 文字の幅) の半分を切り捨てる (縮小で境界が画素の途中に
+                    // 来るとき。丸めないと倍率 1.0・0.5 以外で 1 画素右になる)
+                    long pl = (long) Math.floor((org + x0 * sc) / 0.12 + X_SNAP_ADD), pr = (long) Math.floor((org + (x0 + w) * sc) / 0.12 + X_SNAP_ADD);
+                    long tw = Math.round(l.width * sc / 0.12);
+                    long off = Math.round((cellWrap ? POSM_CENTER - 3 * 0.12 : POSM_CENTER) / 0.12);
+                    x = ((pl + Math.floorDiv(pr - pl - tw, 2L) + off) * 0.12 - org) / sc;
+                } else
                 x = (Math.floor((org + x * sc) / 0.12 + X_SNAP_ADD) * 0.12 - org) / sc;
             }
             if (i == 0) paintPendingIcon(cv, baseline, first.size);
@@ -2238,7 +2437,7 @@ public final class CellPainter {
         };
         paintPendingIcon(cv, baseline, base.size);
         if (suppressText) return;
-        if (lw + rw > availW + 0.01) {
+        if ((vr.number || vr.logical) && lw + rw > availW + 0.01) {   // # で埋めるのは数値・真偽値だけ (文字列は埋めない)
             TextLayout.Run hash = base.copy("#");
             float hw = TextLayout.width(hash, ctx.fonts);
             int n = hw > 0 ? (int) Math.floor(availW / hw) : 0;
@@ -2450,15 +2649,11 @@ public final class CellPainter {
     }
 
     /**
-     * 縦書きの 1 文字の字送り。Excel はそのフォントの自動行高 (折り返しの行送りと同じ) で積む。
+     * 縦書きの 1 文字の字送り (PrinterModel.stackPitchDev。游ゴシックも同じ)。
      */
     private double stackPitch(TextLayout.Run f) {
-        double font = (f.spec.ascent + f.spec.descent) * f.size;
-        // 游ゴシックは回転と同じ (アセント + ディセント) × 1.07 (11pt で 18.48pt)。MS 明朝・BIZ UD 明朝などは
-        // フォントの自動行高
-        if (yuFont(f)) return font * ROT_PITCH;
         double p = L.stackPitch(f.spec.requested, f.size);
-        return p > 0 ? p : font;
+        return p > 0 ? p : (f.spec.ascent + f.spec.descent) * f.size;
     }
 
     /** 回転した文字の行の間隔: 游ゴシックは (アセント + ディセント) × 1.07、ほかは折り返しの行送り。 */
@@ -2486,7 +2681,10 @@ public final class CellPainter {
         for (int i = 0; i < ph.length; i++) total += ph[i] = pitchOf(owners.get(i), owners);
         double top = switch (va) {
             case TOP -> y0 + padTop();
-            case CENTER, DISTRIBUTED, JUSTIFY -> y0 + (h - total) / 2;
+            // 中央揃えは STACK_CENTER_PX 下、結合セルはそこから MERGE_CENTER_PX 上 (書体・大きさによらず単独 5 画素、結合 1 画素)
+            case CENTER -> y0 + (h - total) / 2
+                    + (posx() ? (STACK_CENTER_PX - (mergedText ? MERGE_CENTER_PX : 0)) * 0.12 / Math.max(0.1, L.scale) : 0);
+            case DISTRIBUTED, JUSTIFY -> y0 + (h - total) / 2;
             default -> y0 + h - padBottom() - total;
         };
         double gap = 0;
@@ -2626,7 +2824,7 @@ public final class CellPainter {
                             HorizontalAlignment ha, VerticalAlignment va, boolean up) throws IOException {
         int n = lines.size();
         TextLayout.Line l0 = lines.get(0);
-        double size = l0.runs.isEmpty() ? 11 : l0.runs.get(0).size, k = (l0.ascent + l0.descent) / YU11_AD;
+        double k = (l0.ascent + l0.descent) / YU11_AD;
         double pitch = rotPitch(l0);
         double x1 = x0 + w, yB = y0 + h;
         boolean left = ha == HorizontalAlignment.LEFT || ha == HorizontalAlignment.FILL, right = ha == HorizontalAlignment.RIGHT;
@@ -2680,11 +2878,9 @@ public final class CellPainter {
         boolean neg = angleDeg < 0;
         double t = Math.toRadians(Math.abs(angleDeg)), sn = Math.sin(t), cs = Math.cos(t), cot = cs / sn;
         int n = lines.size();
-        double size = 11, wmax = 0;
-        for (TextLayout.Line li : lines) {
+        double wmax = 0;
+        for (TextLayout.Line li : lines)
             wmax = Math.max(wmax, li.width);
-            if (!li.runs.isEmpty()) size = li.runs.get(0).size;
-        }
         TextLayout.Line l0 = lines.get(0);
         double k = (l0.ascent + l0.descent) / YU11_AD;
         double pitch = rotPitch(l0), step = pitch / sn;

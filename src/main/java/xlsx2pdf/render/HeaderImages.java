@@ -70,11 +70,27 @@ final class HeaderImages {
                 }
                 // 切り抜き・グレースケール・明るさ (VML の imagedata の属性)
                 String key = ip.getPartName().getName();
+                String imgName = key;   // Images.toPdf に渡す名前 (拡張子でメタファイルかを判定する)
+                if (adjusted(im) && Images.isMetafile(data, key)) {
+                    // EMF・WMF は ImageIO で読めないので、切り抜く前の大きさでラスタにしてから補正する
+                    double cl = frac(im.getAttribute("cropleft"), 0), ct = frac(im.getAttribute("croptop"), 0);
+                    double cr = frac(im.getAttribute("cropright"), 0), cb = frac(im.getAttribute("cropbottom"), 0);
+                    double fw = wh[0] / Math.max(0.05, 1 - Math.max(0, cl) - Math.max(0, cr));
+                    double fh = wh[1] / Math.max(0.05, 1 - Math.max(0, ct) - Math.max(0, cb));
+                    java.awt.image.BufferedImage bi = Images.renderMetafile(data, key, fw, fh, ctx.fonts);
+                    if (bi != null) {
+                        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                        javax.imageio.ImageIO.write(bi, "png", bo);
+                        data = bo.toByteArray();
+                        key = key + "#raster";
+                        imgName = key + ".png";   // ラスタにした後は PNG。元の .emf の名前のままだと、もう一度メタファイルとして読んで失敗する
+                    }
+                }
                 byte[] adj = adjust(data, im);
                 if (adj != data) key = key + "#" + im.getAttribute("cropleft") + im.getAttribute("croptop") + im.getAttribute("cropright")
                         + im.getAttribute("cropbottom") + im.getAttribute("grayscale") + im.getAttribute("gain") + im.getAttribute("blacklevel");
                 key = key + "@" + wh[0] + "x" + wh[1];   // メタファイルは大きさに合わせてラスタにするので、大きさごとに分ける
-                PDImageXObject img = Images.toPdf(ctx, key, adj, ip.getPartName().getName(), wh[0], wh[1]);
+                PDImageXObject img = Images.toPdf(ctx, key, adj, imgName, wh[0], wh[1]);
                 if (img != null) out.put(id, new Img(img, wh[0], wh[1]));
             }
         } catch (Exception e) {
@@ -95,6 +111,14 @@ final class HeaderImages {
         }
     }
 
+    /** 切り抜き・グレースケール・明るさのどれかがあるか。 */
+    static boolean adjusted(Element im) {
+        return frac(im.getAttribute("cropleft"), 0) > 0 || frac(im.getAttribute("croptop"), 0) > 0
+                || frac(im.getAttribute("cropright"), 0) > 0 || frac(im.getAttribute("cropbottom"), 0) > 0
+                || "t".equals(im.getAttribute("grayscale")) || "true".equals(im.getAttribute("grayscale"))
+                || !im.getAttribute("gain").isEmpty() || !im.getAttribute("blacklevel").isEmpty();
+    }
+
     /**
      * 切り抜き (cropleft/top/right/bottom)・グレースケール (grayscale="t"、BT.709 の輝度)・明るさとコントラスト (gain・blacklevel)
      * を画像に当てる。何もなければ元のデータを返す。明るさ・コントラストは Excel の印刷の実測から「gain × 元の値 + 切片」とし、
@@ -107,7 +131,7 @@ final class HeaderImages {
         boolean bc = !im.getAttribute("gain").isEmpty() || !im.getAttribute("blacklevel").isEmpty();
         if (cl <= 0 && ct <= 0 && cr <= 0 && cb <= 0 && !gray && !bc) return data;
         try {
-            java.awt.image.BufferedImage src = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(data));
+            java.awt.image.BufferedImage src = Images.decodeLimited(data);   // --max-image-pixels を超える画像は補正せず、元のまま (本文の画像と同じ上限)
             if (src == null) return data;
             int w = src.getWidth(), h = src.getHeight();
             int x0 = (int) Math.round(w * Math.max(0, cl)), y0 = (int) Math.round(h * Math.max(0, ct));
@@ -156,7 +180,12 @@ final class HeaderImages {
         double w = 0, h = 0;
         Matcher m = SIZE.matcher(style);
         while (m.find()) {
-            double v = Double.parseDouble(m.group(2));
+            double v;
+            try {
+                v = Double.parseDouble(m.group(2));
+            } catch (NumberFormatException e) {
+                continue;   // 壊れた値 ("1.2.3" など) はその項目だけ捨てる (ほかの画像を巻き込まない)
+            }
             String u = m.group(3) == null ? "px" : m.group(3);
             v = switch (u) {
                 case "in" -> v * 72;

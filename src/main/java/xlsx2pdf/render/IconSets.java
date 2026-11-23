@@ -111,11 +111,13 @@ final class IconSets {
      *
      * @param value   セルの数値 (数値でなければ null)
      * @param formula しきい値の数式を評価する。評価できなければ null
+     * @param stopAt  これより優先順位の低い (priority の大きい) 規則は使わない (上の規則の「条件を満たす場合は停止」)
      * @return 描くアイコン。なければ null
      */
-    Icon at(int r, int c, BiFunction<Integer, Integer, Double> value, Function<String, Double> formula) {
+    Icon at(int r, int c, BiFunction<Integer, Integer, Double> value, Function<String, Double> formula, int stopAt) {
         for (Rule rule : rules) {
             if (!CfExt.in(rule.ranges, r, c)) continue;
+            if (rule.priority > stopAt) continue;
             Double v = value.apply(r, c);
             if (v == null) return null;
             if (rule.thresholds == null) {

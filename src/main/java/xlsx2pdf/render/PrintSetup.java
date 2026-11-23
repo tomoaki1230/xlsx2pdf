@@ -203,35 +203,51 @@ public final class PrintSetup {
                     if (a != null && a.getFirstRow() >= 0 && a.getFirstColumn() >= 0) p.printAreas.add(a);
                 }
             } else if ("_xlnm.Print_Titles".equalsIgnoreCase(n.getNameName())) {
-                for (String part : splitRefs(f)) {
-                    String r = part.contains("!") ? part.substring(part.lastIndexOf('!') + 1) : part;
-                    r = r.replace("$", "");
-                    String[] ab = r.split(":");
-                    if (ab.length != 2) continue;
-                    if (ab[0].matches("\\d+")) {
-                        // 壊れた定義 (桁あふれ・数でない終わり) は印刷タイトルなしにする (変換全体を止めない)
-                        try {
-                            p.titleRows = new CellRangeAddress(Integer.parseInt(ab[0]) - 1, Integer.parseInt(ab[1]) - 1, -1, -1);
-                        } catch (NumberFormatException e) {
-                            continue;
-                        }
-                    } else if (ab[0].matches("[A-Za-z]+")) {
-                        p.titleCols = new CellRangeAddress(-1, -1, colIndex(ab[0]), colIndex(ab[1]));
-                    } else {
-                        CellRangeAddress a = parseRange(part);
-                        if (a != null) {
-                            if (a.getFirstColumn() == 0 && a.getLastColumn() >= 16383)
-                                p.titleRows = new CellRangeAddress(a.getFirstRow(), a.getLastRow(), -1, -1);
-                            else if (a.getFirstRow() == 0 && a.getLastRow() >= 1048575)
-                                p.titleCols = new CellRangeAddress(-1, -1, a.getFirstColumn(), a.getLastColumn());
-                        }
-                    }
+                try {
+                    readTitles(p, f);
+                } catch (RuntimeException e) {
+                    // 壊れた印刷タイトルの定義は無視する (1 つの名前で変換全体を止めない)
+                    Warnings.add("印刷タイトルの定義を読めませんでした", e);
                 }
             }
         }
         if (printerDpi > 0) { p.hdpi = printerDpi; p.vdpi = printerDpi; }
         return p;
     }
+
+    /** 印刷タイトル (_xlnm.Print_Titles) の参照を読む。 */
+    private static void readTitles(PrintSetup p, String f) {
+        for (String part : splitRefs(f)) {
+            String r = part.contains("!") ? part.substring(part.lastIndexOf('!') + 1) : part;
+            r = r.replace("$", "");
+            String[] ab = r.split(":");
+            if (ab.length != 2) continue;
+            if (ab[0].matches("\\d+") && ab[1].matches("\\d+")) {
+                // 壊れた定義 (桁あふれ) は無視する。降順 ($5:$2) は並べ直し、0 行目以前を含むもの ($0:$3) は捨てる
+                try {
+                    int r0 = Integer.parseInt(ab[0]) - 1, r1 = Integer.parseInt(ab[1]) - 1;
+                    if (Math.min(r0, r1) < 0) continue;
+                    // Excel の行数 (1,048,576) を超える終わりは、最後の行までにする (配列を際限なく広げない)
+                    p.titleRows = new CellRangeAddress(Math.min(r0, r1), Math.min(1048575, Math.max(r0, r1)), -1, -1);
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+            } else if (ab[0].matches("[A-Za-z]+") && ab[1].matches("[A-Za-z]+")) {
+                int c0 = colIndex(ab[0]), c1 = colIndex(ab[1]);
+                if (Math.min(c0, c1) < 0 || Math.max(c0, c1) > 16383) continue;   // 混在 ($A:$A5) や 16384 列を超える指定は無視する
+                p.titleCols = new CellRangeAddress(-1, -1, Math.min(c0, c1), Math.max(c0, c1));
+            } else if (!ab[0].matches("\\d+") && !ab[0].matches("[A-Za-z]+")) {
+                CellRangeAddress a = parseRange(part);
+                if (a != null) {
+                    if (a.getFirstColumn() == 0 && a.getLastColumn() >= 16383)
+                        p.titleRows = new CellRangeAddress(a.getFirstRow(), a.getLastRow(), -1, -1);
+                    else if (a.getFirstRow() == 0 && a.getLastRow() >= 1048575)
+                        p.titleCols = new CellRangeAddress(-1, -1, a.getFirstColumn(), a.getLastColumn());
+                }
+            }
+        }
+    }
+
 
     /**
      * 有効な解像度か。DEVMODE の解像度は負の品質コード (-1 ドラフト〜-4 高品質) のことがあり、4294967292 などとして

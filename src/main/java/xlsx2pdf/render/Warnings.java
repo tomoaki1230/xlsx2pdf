@@ -15,7 +15,7 @@ public final class Warnings {
     static final int MAX = 1000;
 
     private final Set<String> items = new LinkedHashSet<>();
-    private int dropped;
+    private final java.util.Set<Integer> droppedKeys = new java.util.HashSet<>();
     private String sheet;
 
     private Warnings() {}
@@ -57,14 +57,15 @@ public final class Warnings {
         }
         String s = sb.toString();
         if (w.items.contains(s)) return;
-        if (w.items.size() >= MAX) w.dropped++;
+        // 上限を超えた分も、同じ文は 1 件と数える (文そのものは持たず、ハッシュだけ覚える)
+        if (w.items.size() >= MAX) w.droppedKeys.add(s.hashCode());
         else w.items.add(s);
     }
 
     /** 記録した警告の一覧。 */
     public List<String> list() {
         List<String> out = new ArrayList<>(items);
-        if (dropped > 0) out.add("ほかに " + dropped + " 件の警告があります");
+        if (!droppedKeys.isEmpty()) out.add("ほかに " + droppedKeys.size() + " 件の警告があります");
         return List.copyOf(out);
     }
 }

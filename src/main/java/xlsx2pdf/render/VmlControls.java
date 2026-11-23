@@ -566,8 +566,8 @@ final class VmlControls {
                     }
                 }
                 out.add(c);
-              } catch (RuntimeException | StackOverflowError e) {
-                // 1 つのコントロールが読めなくても、ほかのコントロールは読む
+              } catch (IOException | RuntimeException | StackOverflowError e) {
+                // 1 つのコントロールが読めなくても (画像の部品を開けない場合も)、ほかのコントロールは読む
                 Warnings.add("フォームコントロールの定義を読めませんでした", e);
               }
             }

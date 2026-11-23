@@ -46,11 +46,19 @@ public final class Paginator {
     private final SheetLayout L;
     private final PrintSetup ps;
     /** 作るページ数 (白紙を除く前) の上限 (0 以下は無制限) と、これまでに作った数。 */
-    private long maxPages, made;
+    private long maxPages, made, limitShown;
 
     /** 作るページ数の上限を設定する (0 以下は無制限。超えると {@link xlsx2pdf.LimitExceededException})。 */
     public void setMaxPages(long maxPages) {
-        this.maxPages = maxPages;
+        setMaxPages(maxPages, maxPages);
+    }
+
+    /**
+     * ページ数の上限。budget はこのシートで使える残りのページ数、limit は案内に出す上限 (--max-pages の値)。
+     */
+    public void setMaxPages(long budget, long limit) {
+        this.limitShown = limit;
+        this.maxPages = budget;
     }
 
     /** ページ分割器を作る。 */
@@ -79,7 +87,7 @@ public final class Paginator {
         return (w % 2 == 1 ? 4.5 : 4) * 0.12;
     }
     static final double POSM_DX = 0.5;
-    /** 既定の動きの 100% のシートの表の位置の補正 (pt)。列幅の丸め の後に掃引し直した値。 */
+    /** 既定の動きの 100% のシートの表の位置の補正 (pt)。実測に合わせた値。 */
     static final double POSM_DX100_MODERN = 0.75;
     /** 倍率 100% の表の縦の補正。 */
     static final double POSM_DY100_MODERN = 0.75;
@@ -90,11 +98,6 @@ public final class Paginator {
      */
     static final int FITLIN_TOL = 1;
     static final double FIT_TIGHT_DEFAULT = 0.0012;
-    /**
-     * 既定の動きの列の改ページ: 列の合計が使える幅よりこの値 (pt) だけ大きくても収まるとみなす。負なら小さくなければ収まらない。
-     * --author-env は 0.01。
-     */
-    static final double COL_TOL = -0.05;
     /**
      * 縮小したシートの改ページで、行の合計が使える高さより 0.05pt 以上小さくなければ収まらないとみなす。列は 0 (効果 +0.0001 で、ちょうど同じ幅のシートを Excel が収める例と収めない例がある)。
      */
@@ -184,6 +187,8 @@ public final class Paginator {
     static final double HDR_W_MDW = 2.808, HDR_DIGIT_MDW = 0.795;
     /** 行番号の列の幅の余白 (数字の送り幅の何文字分か)。 */
     static final double HDR_PAD_DIGITS = 0.75;
+    /** Excel のページの左余白の下限 (pt。600 dpi の 8 画素)。 */
+    static final double LEFT_MIN_PT = 0.96;
     /** 標準フォントの数字の送り幅 (pt)。0 なら最大数字幅 (mdw) から近似する。 */
     public double digitAdvance;
 
@@ -314,7 +319,7 @@ public final class Paginator {
             int r = start;
             while (r <= a.getLastRow()) {
                 if (r > start && manual && ps.rowBreaks.contains(r)) break;
-                double rh = pageCeil(L.rh(r), scale, ps.vdpi);
+                double rh = L.rh(r);   // 線形縮小の画素丸めは SheetLayout 側で済んでいる
                 if (r > start && h + rh > limit + (exact ? 1e-6 : L.model().authorEnv && (scale < 1) ? -ROW_STRICT : 0.01)) {
                     break;
                 }
@@ -327,11 +332,6 @@ public final class Paginator {
             if (maxPages > 0 && out.size() > maxPages) break;  // 上限を超えることは確定 (paginateArea で中止)
         }
         return out;
-    }
-
-    /** 線形に縮小するシートで、行高・列幅を縮小後のデバイス画素に切り上げる (シートの pt で返す)。 */
-    private double pageCeil(double v, double scale, int dpi) {
-        return v;
     }
 
     /** 倍率の上限の 2 回目の判定 (丸める前の幅と「倍率 − 0.5%」) の最中か。 */
@@ -350,7 +350,7 @@ public final class Paginator {
         else if (inFit && fitShrink == 1) avail = intAvail(avail * scale, ps.paperW, ps.left, ps.right, FIT_PXW, ps.hdpi) / scale;
         else if (!inFit) avail = intAvail(avail * scale, ps.paperW, ps.left, ps.right, PAGE_PXW, ps.hdpi) / scale;
         avail -= hdrW;
-        boolean exact = inFit && !L.model().authorEnv || !inFit && !L.model().authorEnv;   // 画素の余裕だけで判定する
+        boolean exact = !L.model().authorEnv;   // 既定の動きは、「ページに合わせる」かどうかによらず画素の余裕だけで判定する
         int start = a.getFirstColumn();
         while (start <= a.getLastColumn()) {
             double limit = avail - titleColsW(start);
@@ -358,8 +358,8 @@ public final class Paginator {
             int c = start;
             while (c <= a.getLastColumn()) {
                 if (c > start && manual && ps.colBreaks.contains(c)) break;
-                double cw = raw ? L.cw100(c) : pageCeil(L.cw(c), scale, ps.hdpi);
-                if (c > start && w + cw > limit + (exact ? 1e-6 : !L.model().authorEnv ? COL_TOL : 0.01)) break;
+                double cw = raw ? L.cw100(c) : L.cw(c);
+                if (c > start && w + cw > limit + (exact ? 1e-6 : 0.01)) break;
                 if (c == start && inFit && cw > limit + 1e-6) colOver = true;
                 w += cw;
                 c++;
@@ -377,7 +377,7 @@ public final class Paginator {
         List<Band> cols = colBands(a, scale);
         long n = (long) rows.size() * cols.size();
         if (maxPages > 0 && made + n > maxPages) {
-            throw new xlsx2pdf.LimitExceededException("ページ数が上限 (" + maxPages + ") を超えます (シート「" + L.sheet.getSheetName()
+            throw new xlsx2pdf.LimitExceededException("ページ数が上限 (" + (limitShown > 0 ? limitShown : maxPages) + ") を超えます (シート「" + L.sheet.getSheetName()
                     + "」の印刷範囲 " + a.formatAsString() + " が約 " + n + " ページ)。--max-pages で上限を上げるか、--no-limits で外せます", false);
         }
         made += n;
@@ -414,7 +414,10 @@ public final class Paginator {
         p.contentH = th + bodyH + hdrH;
         p.hdrW = hdrW;
         p.hdrH = hdrH;
-        double ox = Math.max(ps.left, ps.minMargin), oy = ps.top;
+        // Excel は左余白に 8 画素 (0.96pt) の下限を設ける (左余白 0 のシートは 0.96pt 右、水平中央揃えは 0.48pt 右。
+        // 0.04 インチ以上、右・上の余白 0 はずれない)。改ページの幅には影響しない
+        double leftMin = L.model().authorEnv ? ps.minMargin : Math.max(ps.minMargin, LEFT_MIN_PT);
+        double ox = Math.max(ps.left, leftMin), oy = ps.top;
         boolean centerH = ps.centerH && availW() > p.contentW * scale;
         boolean posm = (L.linear || scale == 1);
         boolean posx = posm && !L.model().authorEnv;
@@ -423,7 +426,7 @@ public final class Paginator {
             ox = Math.floor(ox / 0.12 + 1e-6) * 0.12;
             oy = Math.floor(oy / 0.12 + 1e-6) * 0.12;
         }
-        if (centerH && posx) ox = centerPx(ps.paperW, Math.max(ps.left, ps.minMargin), Math.max(ps.right, ps.minMargin), p.contentW * scale, scale);
+        if (centerH && posx) ox = centerPx(ps.paperW, Math.max(ps.left, leftMin), Math.max(ps.right, ps.minMargin), p.contentW * scale, scale);
         else if (centerH) ox += (availW() - p.contentW * scale) / 2 + (posx ? -posxCenter(scale) : posm ? POSM_CENTER_DX_MODERN : 0);
         else if (posm && !L.model().authorEnv) ox += posxOffset(scale);
         else if (posm) ox += scale != 1 ? POSM_DX : POSM_DX100_MODERN;

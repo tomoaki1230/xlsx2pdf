@@ -155,7 +155,10 @@ final class ChartExPainter {
         CellReference a = ar.getFirstCell(), b = ar.getLastCell();
         Sheet sh = a.getSheetName() == null ? null : ctx.wb.getSheet(a.getSheetName());
         if (sh == null) return out;
+        long total = 0;
         for (int c = a.getCol(); c <= b.getCol(); c++) {
+            // 行全体の参照 (16384 列 × 10 万行) で終わらなくならないよう、全体で ChartPainter と同じ件数までにする
+            if (total >= ChartPainter.MAX_POINTS) break;
             List<String> col = new ArrayList<>();
             for (int rr = a.getRow(); rr <= b.getRow() && rr - a.getRow() < 100_000; rr++) {
                 Row row = sh.getRow(rr);
@@ -169,6 +172,7 @@ final class ChartExPainter {
                 }
                 col.add(v);
             }
+            total += col.size();
             out.add(col);
         }
         return out;
@@ -387,7 +391,12 @@ final class ChartExPainter {
                     : sig2(3.5 * sd / Math.cbrt(v.size())); // Excel は幅を有効数字 2 桁に丸める
             int bins = Xml.child(binning, "binCount") != null ? Xml.intAttr(Xml.child(binning, "binCount"), "val", 5)
                     : (int) Math.max(1, Math.ceil((mx - mn) / Math.max(w, 1e-12)));
-            if (Xml.child(binning, "binCount") != null) w = (mx - mn) / bins;
+            // 区間の数は 1〜MAX_BINS (binSize が極端に小さい・binCount が極端に大きい・0 以下のファイルで止まらないように)
+            if (bins < 1 || bins > MAX_BINS) {
+                bins = Math.max(1, Math.min(MAX_BINS, bins));
+                w = (mx - mn) / bins;
+            }
+            if (Xml.child(binning, "binCount") != null || !(w > 0)) w = (mx - mn) / bins;
             boolean right = !"l".equals(Xml.attr(binning, "intervalClosed", "r"));
             for (int b = 0; b < bins; b++) {
                 double a = mn + b * w, e = mn + (b + 1) * w;
@@ -606,4 +615,7 @@ final class ChartExPainter {
             g++;
         }
     }
+
+    /** ヒストグラムの区間の数の上限。 */
+    static final int MAX_BINS = 1000;
 }

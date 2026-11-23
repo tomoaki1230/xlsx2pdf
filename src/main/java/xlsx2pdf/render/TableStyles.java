@@ -89,9 +89,21 @@ final class TableStyles {
     TableStyles(XSSFSheet sheet, SheetLayout L, Theme theme) {
         this.theme = theme;
         for (XSSFTable x : sheet.getTables()) {
-            if (!styled(x)) continue;
+            try {
+                addTable(x, L);
+            } catch (RuntimeException e) {
+                // 1 つの表が読めなくても、ほかの表のスタイルは読む
+                Warnings.add("表のスタイルを読めませんでした", e);
+            }
+        }
+        readPivots(sheet, L);
+    }
+
+    private void addTable(XSSFTable x, SheetLayout L) {
+        {
+            if (!styled(x)) return;
             AreaReference a = x.getCellReferences();
-            if (a == null) continue;
+            if (a == null) return;
             Table t = new Table();
             t.r0 = a.getFirstCell().getRow(); t.c0 = a.getFirstCell().getCol();
             t.r1 = a.getLastCell().getRow(); t.c1 = a.getLastCell().getCol();
@@ -103,13 +115,24 @@ final class TableStyles {
             t.colBands = bands(t.style, TableStyleType.firstColumnStripe, TableStyleType.secondColumnStripe, t.c0, t.c1, false, L);
             tables.add(t);
         }
+    }
+
+    private void readPivots(XSSFSheet sheet, SheetLayout L) {
+        List<org.apache.poi.xssf.usermodel.XSSFPivotTable> pts;
         try {
-            for (org.apache.poi.xssf.usermodel.XSSFPivotTable pt : sheet.getPivotTables()) {
-                Table t = pivot(pt, sheet, L);
-                if (t != null) tables.add(t);
-            }
+            pts = sheet.getPivotTables();
         } catch (RuntimeException e) {
             Warnings.add("ピボットテーブルのスタイルを読めませんでした", e);
+            pts = List.of();
+        }
+        for (org.apache.poi.xssf.usermodel.XSSFPivotTable pt : pts) {
+            // 1 つのピボットが読めなくても、ほかのピボットのスタイルは読む
+            try {
+                Table t = pivot(pt, sheet, L);
+                if (t != null) tables.add(t);
+            } catch (RuntimeException e) {
+                Warnings.add("ピボットテーブルのスタイルを読めませんでした", e);
+            }
         }
     }
 
@@ -139,7 +162,7 @@ final class TableStyles {
         t.rowKind = new int[t.r1 - t.bodyR0 + 1];
         t.rowLevel = new int[t.rowKind.length];
         t.itemR = new int[t.rowKind.length];
-        boolean grandRow = false, grandCol = false;
+        boolean grandRow = false;
         if (def.isSetRowItems()) {
             var items = def.getRowItems().getIArray();
             for (int k = 0; k < items.length && k < t.rowKind.length; k++) {
@@ -174,7 +197,6 @@ final class TableStyles {
                     case "data" -> ITEM;
                     default -> SUBTOTAL;
                 };
-                if (t.colKind[k] == GRAND) grandCol = true;
             }
         }
         // 総計の行は本体の後ろ (集計行の要素)
@@ -515,7 +537,7 @@ final class TableStyles {
             }
             if (bs == null || bs == BorderStyle.NONE) continue;
             Color cc = color(col);
-            return new Object[] {new Edge(bs, cc == null || black ? Color.BLACK : cc), y.rank};
+            return new Object[] {new Edge(bs, cc == null || black ? Color.BLACK : cc, true), y.rank};
         }
         return null;
     }

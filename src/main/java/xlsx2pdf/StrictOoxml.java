@@ -29,23 +29,6 @@ final class StrictOoxml {
     };
     private static final java.util.regex.Pattern GENERIC = java.util.regex.Pattern.compile("http://purl\\.oclc\\.org/ooxml/(\\w+)/");
 
-    /** zip の先頭の項目に Strict の名前空間があるか (_rels/.rels か [Content_Types].xml の次に来る XML を見る)。 */
-    static boolean isStrict(InputStream zip, long maxEntryBytes) throws IOException {
-        try (ZipInputStream zi = new ZipInputStream(zip)) {
-            ZipEntry e;
-            int seen = 0;
-            // 読み飛ばす項目も展開されるので、見るのは先頭の 16 項目まで (Excel は _rels/.rels・xl/workbook.xml を先頭近くに置く)
-            while ((e = zi.getNextEntry()) != null && seen++ < 16) {
-                String n = e.getName();
-                if (!(n.equals("_rels/.rels") || n.equals("xl/workbook.xml"))) continue;
-                byte[] b = readLimited(zi, Math.min(maxEntryBytes > 0 ? maxEntryBytes : Long.MAX_VALUE, 4L << 20));
-                if (indexOf(b, STRICT_BYTES) >= 0) return true;
-                if (n.equals("xl/workbook.xml")) return false;
-            }
-        }
-        return false;
-    }
-
     /**
      * Strict のブックを通常の形に書き換えた zip を返す。
      *
@@ -77,6 +60,14 @@ final class StrictOoxml {
         return out.toByteArray();
     }
 
+    /** 判定で読む先頭の大きさ (Strict の名前空間は先頭の要素にある)。 */
+    static final int PREFIX = 1 << 20;
+
+    /** 先頭の max バイトまでを読む (それより大きい項目でも例外にしない)。 */
+    private static byte[] readPrefix(InputStream in, int max) throws IOException {
+        return in.readNBytes(max);
+    }
+
     private static byte[] readLimited(InputStream in, long max) throws IOException {
         ByteArrayOutputStream o = new ByteArrayOutputStream();
         byte[] buf = new byte[65536];
@@ -106,7 +97,7 @@ final class StrictOoxml {
                 ZipEntry e = z.getEntry(n);
                 if (e == null) continue;
                 try (InputStream in = z.getInputStream(e)) {
-                    byte[] b = readLimited(in, Math.min(maxEntryBytes > 0 ? maxEntryBytes : Long.MAX_VALUE, 4L << 20));
+                    byte[] b = readPrefix(in, PREFIX);
                     if (indexOf(b, STRICT_BYTES) >= 0) return true;
                 }
             }
@@ -114,9 +105,44 @@ final class StrictOoxml {
         return false;
     }
 
+    /**
+     * メモリの zip に Strict の名前空間があるか。目次 (中央ディレクトリ) から 2 つの項目の位置を求め、その項目だけを展開する
+     * (ほかの項目は展開しない)。目次を読めなければ Strict でないとみなす (POI が開くときに調べる)。
+     */
+    static boolean isStrict(byte[] zip, long maxEntryBytes) throws IOException {
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(zip).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        int eocd = -1;
+        for (int i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 65535); i--) {
+            if (b.getInt(i) == 0x06054b50) { eocd = i; break; }
+        }
+        if (eocd < 0) return false;
+        int count = b.getShort(eocd + 10) & 0xFFFF;
+        long cd = b.getInt(eocd + 16) & 0xFFFFFFFFL;
+        int p = (int) Math.min(cd, zip.length);
+        for (int k = 0; k < count && p + 46 <= zip.length; k++) {
+            if (b.getInt(p) != 0x02014b50) break;
+            int nameLen = b.getShort(p + 28) & 0xFFFF, extraLen = b.getShort(p + 30) & 0xFFFF, commentLen = b.getShort(p + 32) & 0xFFFF;
+            long local = b.getInt(p + 42) & 0xFFFFFFFFL;
+            if (p + 46 + nameLen > zip.length) break;
+            String n = new String(zip, p + 46, nameLen, java.nio.charset.StandardCharsets.UTF_8);
+            if ((n.equals("_rels/.rels") || n.equals("xl/workbook.xml")) && local < zip.length) {
+                // その項目の局所ヘッダーから読む (ZipInputStream は最初の項目だけを展開する)
+                try (ZipInputStream zi = new ZipInputStream(new ByteArrayInputStream(zip, (int) local, zip.length - (int) local))) {
+                    ZipEntry e = zi.getNextEntry();
+                    if (e != null && e.getName().equals(n)) {
+                        byte[] d = readPrefix(zi, PREFIX);
+                        if (indexOf(d, STRICT_BYTES) >= 0) return true;
+                    }
+                }
+            }
+            p += 46 + nameLen + extraLen + commentLen;
+        }
+        return false;
+    }
+
     /** バイト列が Strict なら書き換え、そうでなければ null。 */
     static byte[] convertIfStrict(byte[] book, long maxEntryBytes) throws IOException {
-        if (!isStrict(new ByteArrayInputStream(book), maxEntryBytes)) return null;
+        if (!isStrict(book, maxEntryBytes)) return null;
         return toTransitional(new ByteArrayInputStream(book), maxEntryBytes, maxEntryBytes > 0 ? 1L << 30 : 0);
     }
 }

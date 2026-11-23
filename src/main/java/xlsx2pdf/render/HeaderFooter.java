@@ -176,9 +176,9 @@ public final class HeaderFooter {
             boolean textOnly = img == null && rows.size() == 1 && !rows.get(0).image();
             boolean oneRun = textOnly && runCount(rows.get(0).line()) <= 1;
             boolean single = textOnly && oneRun;
-            double inset = (HF_INSET & 1) != 0 && single ? HF_INSET_PT : 0;
-            boolean sideOk = textOnly && oneRun;
-            double side = sideOk && (s.pos == 'L' && (HF_INSET & 2) != 0 || s.pos == 'R' && (HF_INSET & 4) != 0) ? HF_INSET_PT : 0;
+            double inset = single ? HF_INSET_PT : 0;
+            // 左の部分は右へ、右の部分は左へ、同じだけ内側にずらす
+            double side = single && (s.pos == 'L' || s.pos == 'R') ? HF_INSET_PT : 0;
             double y = header ? margin + inset : pageH - margin - inset - blockH;
             for (int k = 0; k < rows.size(); k++) {
                 Row r = rows.get(k);
@@ -200,7 +200,7 @@ public final class HeaderFooter {
                         case 'R' -> rx - side - l.width;
                         default -> (lx + rx) / 2 - l.width / 2;
                     };
-                    TextLayout.drawLine(cv, l, x, y + l.ascent + supExtra(l) + HF_BASE + (explicitLook(l) ? HF_CODE_DROP : 0), 0, 0);
+                    TextLayout.drawLine(cv, l, x, y + l.ascent + supExtra(l) + (explicitLook(l) ? HF_CODE_DROP : plainDrop(l, header)), 0, 0);
                 }
                 y += adv.get(k);
             }
@@ -247,10 +247,8 @@ public final class HeaderFooter {
         }
     }
 
-    /** 内側の余白: 1 = 1 行の部分を縦に、2 = 左の部分を横に、4 = 右の部分を横に (右は長い文字で合わないので使わない)。 */
-    static final int HF_INSET = 7;
+    /** 1 行だけの部分を枠の内側へずらす量 (pt。縦と、左右の部分の横)。 */
     static final double HF_INSET_PT = 0.96;
-    static final double HF_BASE = 0;
 
     /**
      * 行送り (pt): Excel はその行の文字の書体・大きさのプリンタの標準行 (600 dpi、printrows.tsv) の最大で行を送る。
@@ -303,6 +301,22 @@ public final class HeaderFooter {
         }
         return out;
     }
+
+    /**
+     * 書体も大きさも指定しない行の基線を下げる量 (pt)。ヘッダーは大きさによらず約 0.18pt、
+     * フッターは印刷する大きさに比例し 6pt で 0、11pt で約 0.35pt、Excel が下に描く。
+     */
+    static double plainDrop(TextLayout.Line l, boolean header) {
+        // 下線のある行は下げない (Excel は文字だけ下げ、下線は元の位置)
+        for (TextLayout.Run r : l.runs) if (!r.text.isEmpty() && r.underline != 0) return 0;
+        if (header) return HF_PLAIN_DROP_H;
+        double sz = 0;
+        for (TextLayout.Run r : l.runs) if (!r.text.isEmpty()) sz = Math.max(sz, r.size);
+        return Math.max(0, HF_PLAIN_DROP_F_A * sz - HF_PLAIN_DROP_F_B);
+    }
+
+    static final double HF_PLAIN_DROP_H = 0.18, HF_PLAIN_DROP_F_A = 0.067, HF_PLAIN_DROP_F_B = 0.4;
+
 
     /** 書体か大きさを指定した (&amp;"書体"・&amp;数字) 文字のある行か。 */
     private boolean explicitLook(TextLayout.Line l) {

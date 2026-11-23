@@ -9,6 +9,7 @@ import org.apache.poi.xssf.usermodel.XSSFCell;
 import org.apache.poi.xssf.usermodel.XSSFFormulaEvaluator;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import xlsx2pdf.render.formula.FormulaContext;
 import org.openxmlformats.schemas.spreadsheetml.x2006.main.CTCell;
 
 /**
@@ -34,42 +35,56 @@ public final class Recalc {
      * @return 件数 (数式のセル、計算した結果で置き換えたセル、保存された結果のままにしたセル)
      */
     public static Result run(XSSFWorkbook wb, Runnable deadline) {
-        XSSFFormulaEvaluator ev = wb.getCreationHelper().createFormulaEvaluator();
-        // 外部のブックへの参照は、ブックに残っている値 (externalLink のキャッシュ) で計算する
-        ev.setIgnoreMissingWorkbooks(true);
+        return run(wb, deadline, null);
+    }
+
+    /**
+     * @param filePath ブックのファイルのパス (CELL("filename") 用。分からなければ null)
+     */
+    public static Result run(XSSFWorkbook wb, Runnable deadline, String filePath) {
         int formulas = 0, updated = 0, kept = 0;
         java.util.Map<String, java.util.List<String>> keptAt = new java.util.LinkedHashMap<>(), errorAt = new java.util.LinkedHashMap<>();
-        for (int i = 0; i < wb.getNumberOfSheets(); i++) {
-            XSSFSheet sheet = wb.getSheetAt(i);
-            for (Row row : sheet) {
-                if (deadline != null) deadline.run();
-                for (Cell c : row) {
-                    if (c.getCellType() != CellType.FORMULA) continue;
-                    formulas++;
-                    XSSFCell cell = (XSSFCell) c;
-                    CTCell saved = (CTCell) cell.getCTCell().copy();
-                    boolean savedError = saved.isSetT() && saved.getT() == org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellType.E;
-                    boolean ok;
-                    try {
-                        ev.evaluateFormulaCell(cell);
-                        ok = savedError || !unknownName(cell);
-                    } catch (RuntimeException | StackOverflowError e) {
-                        // 計算できない数式 (循環に近い深い参照を含む) は保存された結果のまま
-                        ok = false;
-                    }
-                    if (ok) {
-                        updated++;
-                        // 保存された結果はエラーでないのに、計算の結果がエラー (#REF!・#VALUE! など) になったセル
-                        if (!savedError && cell.getCachedFormulaResultType() == CellType.ERROR)
-                            errorAt.computeIfAbsent(sheet.getSheetName(), k -> new java.util.ArrayList<>())
-                                    .add(cell.getAddress().formatAsString() + " (" + errName(cell.getErrorCellValue()) + ")");
-                    } else {
-                        cell.getCTCell().set(saved);
-                        kept++;
-                        keptAt.computeIfAbsent(sheet.getSheetName(), k -> new java.util.ArrayList<>()).add(cell.getAddress().formatAsString());
+        FormulaContext.register(wb);
+        try {
+            FormulaContext.setFilePath(filePath);
+            XSSFFormulaEvaluator ev = wb.getCreationHelper().createFormulaEvaluator();
+            // 外部のブックへの参照は、ブックに残っている値 (externalLink のキャッシュ) で計算する
+            ev.setIgnoreMissingWorkbooks(true);
+            for (int i = 0; i < wb.getNumberOfSheets(); i++) {
+                XSSFSheet sheet = wb.getSheetAt(i);
+                FormulaContext.setCurrentSheet(i);
+                for (Row row : sheet) {
+                    if (deadline != null) deadline.run();
+                    for (Cell c : row) {
+                        if (c.getCellType() != CellType.FORMULA) continue;
+                        formulas++;
+                        XSSFCell cell = (XSSFCell) c;
+                        CTCell saved = (CTCell) cell.getCTCell().copy();
+                        boolean savedError = saved.isSetT() && saved.getT() == org.openxmlformats.schemas.spreadsheetml.x2006.main.STCellType.E;
+                        boolean ok;
+                        try {
+                            ev.evaluateFormulaCell(cell);
+                            ok = savedError || !unknownName(cell);
+                        } catch (RuntimeException | StackOverflowError e) {
+                            // 計算できない数式 (循環に近い深い参照・回数の多すぎる計算を含む) は保存された結果のまま
+                            ok = false;
+                        }
+                        if (ok) {
+                            updated++;
+                            // 保存された結果はエラーでないのに、計算の結果がエラー (#REF!・#VALUE! など) になったセル
+                            if (!savedError && cell.getCachedFormulaResultType() == CellType.ERROR)
+                                errorAt.computeIfAbsent(sheet.getSheetName(), k -> new java.util.ArrayList<>())
+                                        .add(cell.getAddress().formatAsString() + " (" + errName(cell.getErrorCellValue()) + ")");
+                        } else {
+                            cell.getCTCell().set(saved);
+                            kept++;
+                            keptAt.computeIfAbsent(sheet.getSheetName(), k -> new java.util.ArrayList<>()).add(cell.getAddress().formatAsString());
+                        }
                     }
                 }
             }
+        } finally {
+            FormulaContext.clear();
         }
         Warnings.sheet(null);
         if (kept > 0)

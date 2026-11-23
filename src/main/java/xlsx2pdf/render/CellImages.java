@@ -1,5 +1,6 @@
 package xlsx2pdf.render;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -20,7 +21,8 @@ import org.w3c.dom.Element;
  */
 final class CellImages {
     /** vm (1 から) ごとの画像のデータ (画像でない値は null)。 */
-    private final List<byte[]> byVm = new ArrayList<>();
+    /** vm ごとの画像の部品 (描くときに読む。変換の始めに全部の画像を読み込んで持ち続けない)。 */
+    private final List<PackagePart> byVm = new ArrayList<>();
     /** vm ごとの画像の名前 (形式の判定用)。 */
     private final List<String> names = new ArrayList<>();
 
@@ -90,7 +92,7 @@ final class CellImages {
         // 関係番号ごとの画像
         List<String> relIds = new ArrayList<>();
         for (Element r : Xml.children(rels, "rel")) relIds.add(r.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id"));
-        Map<Integer, byte[]> imgData = new HashMap<>();
+        Map<Integer, PackagePart> imgData = new HashMap<>();
         Map<Integer, String> imgName = new HashMap<>();
         for (int i = 0; i < relIds.size(); i++) {
             PackageRelationship pr = relPart.getRelationship(relIds.get(i));
@@ -98,10 +100,8 @@ final class CellImages {
             var target = PackagingURIHelper.resolvePartUri(relPart.getPartName().getURI(), pr.getTargetURI());
             PackagePart img = part(pkg, target.getPath());
             if (img == null) continue;
-            try (InputStream in = img.getInputStream()) {
-                imgData.put(i, in.readAllBytes());
-                imgName.put(i, target.getPath());
-            }
+            imgData.put(i, img);
+            imgName.put(i, target.getPath());
         }
         // futureMetadata (XLRICHVALUE) の bk ごとの値の番号
         List<Integer> rvb = new ArrayList<>();
@@ -130,7 +130,14 @@ final class CellImages {
     /** vm (1 から) の画像のデータ (無ければ null)。 */
     byte[] image(long vm) {
         int i = (int) vm - 1;
-        return i >= 0 && i < byVm.size() ? byVm.get(i) : null;
+        PackagePart p = i >= 0 && i < byVm.size() ? byVm.get(i) : null;
+        if (p == null) return null;
+        try (InputStream in = p.getInputStream()) {
+            return in.readAllBytes();
+        } catch (IOException | RuntimeException e) {
+            Warnings.add("セルに配置した画像「" + name(vm) + "」を読めませんでした", e);
+            return null;
+        }
     }
 
     /** vm (1 から) の画像の名前。 */

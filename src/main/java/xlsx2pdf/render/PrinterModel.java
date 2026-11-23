@@ -288,13 +288,37 @@ public final class PrinterModel {
      * 折り返した文字の行送り (プリンタの画素)。字面の高さが em と同じフォントは 100% で ppem + 10 画素、縮小時はそれを倍率で丸める
      * (Excel の行送り: 8pt 77、10pt 93、11pt 102、12pt 110、14pt 127、16pt 143。10pt × 77% は 72)。ほかのフォントは {@link #autoRowDev}。
      */
-    public int linePitchDev(String font, double sizePt, double scale, int vdpi) {
+    public int linePitchDev(String font, double sizePt, double scale, int vdpi) { return linePitchDev(font, sizePt, scale, vdpi, true); }
+
+    /** @param cell セルの折り返し (false はコメントの一覧など。游ゴシック・メイリオの縮小時の規則を使わない) */
+    public int linePitchDev(String font, double sizePt, double scale, int vdpi, boolean cell) {
         String n = FontManager.norm(font == null ? fontName : font);
         if (!authorEnv && vdpi == 600 && (isMs(n) || FontCalc.emHeight(font == null ? fontName : font))) {
             long p = Math.round(sizePt * vdpi / 72.0);
             return (int) Math.floor((p + 10) * scale + 0.5 + 1e-9);
         }
+        // 游ゴシック・メイリオ: 100% の行送りを倍率で丸める (折り返しの行の間隔。Meiryo UI・Yu Gothic UI は縮めた大きさで計算し直す方が合う)
+        if (cell && !authorEnv && vdpi == 600 && linearPitch(n) && scale < 1)
+            return (int) Math.floor(autoRowDev(font, sizePt, 1.0, vdpi) * scale + 0.5 + 1e-9);
         return autoRowDev(font, sizePt, scale, vdpi);
+    }
+
+    /** 折り返しの行送りを 100% の値から倍率で縮める書体 (游ゴシック・メイリオ。UI 版を除く)。 */
+    static boolean linearPitch(String norm) {
+        String m = norm.replace(" ", "");
+        return (m.startsWith("游ゴシック") || m.startsWith("yugothic") || m.equals("メイリオ") || m.equals("meiryo")) && !m.endsWith("ui");
+    }
+
+    /**
+     * 縦書きの字送り (プリンタの画素)。字面の高さが em と同じフォントは、倍率で縮めた ppem + 10 画素
+     * (100% で 8pt は 77、16pt は 143。縮小では折り返しの行送りと違い +10 を縮めない: 63% の 16pt は 94)。
+     * ほかのフォントは 0 (呼び出し側で {@link #autoRowDev})。
+     */
+    public int stackPitchEmDev(String font, double sizePt, double scale, int vdpi) {
+        String n = FontManager.norm(font == null ? fontName : font);
+        if (!authorEnv && vdpi == 600 && (isMs(n) || FontCalc.emHeight(font == null ? fontName : font)))
+            return (int) Math.round(sizePt * scale * vdpi / 72.0) + 10;
+        return 0;
     }
 
     public int autoRowDev(String font, double sizePt, double scale, int vdpi) {
@@ -340,7 +364,7 @@ public final class PrinterModel {
      */
     public Factors factors(double scale, int hdpi, int vdpi) {
         Factors f = new Factors();
-        // 実体化する ppem は四捨五入 (偶数丸め・切り上げは不採用)
+        // 実体化する ppem は四捨五入 (偶数丸めや切り上げにはしない)
         long px = Math.round(size * scale * hdpi / 72.0);
         long py = Math.round(size * scale * vdpi / 72.0);
         // 古い Excel で作成 (lowestEdited ≤ 6) し Excel 2016 以降で最後に編集 (lastEdited ≥ 7) したブックの ＭＳ 系は、

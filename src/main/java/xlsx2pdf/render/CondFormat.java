@@ -53,7 +53,12 @@ public final class CondFormat {
      * @param style 線の種類
      * @param color 線の色
      */
-    public record Edge(BorderStyle style, Color color) {}
+    /** 罫線の 1 辺。table は表のスタイルの罫線か (セル・条件付き書式の罫線に負ける)。 */
+    public record Edge(BorderStyle style, Color color, boolean table) {
+        public Edge(BorderStyle style, Color color) { this(style, color, false); }
+        /** 条件付き書式で消した辺 (隣のセルの罫線より優先して、辺を描かない)。 */
+        public boolean cleared() { return style == BorderStyle.NONE; }
+    }
 
     private final RenderContext ctx;
     private final XSSFSheet sheet;
@@ -101,6 +106,12 @@ public final class CondFormat {
     }
 
     /**
+     * いま評価しているセルで、「条件を満たす場合は停止」で止めた規則の優先順位 (なければ Integer.MAX_VALUE)。
+     * それより優先順位の低い (priority の大きい) データバー・アイコンセットは使わない (Excel と同じ)。
+     */
+    private int stopAt = Integer.MAX_VALUE;
+
+    /**
      * セルに適用する条件付き書式を返す。
      *
      * @return 適用する書式。該当しなければ null
@@ -110,6 +121,7 @@ public final class CondFormat {
         long key = (long) r * 16384 + c;
         if (cache.containsKey(key)) return cache.get(key);
         Result res = null;
+        stopAt = Integer.MAX_VALUE;
         if (any && eval != null) {
             try {
                 List<EvaluationConditionalFormatRule> rules =
@@ -130,24 +142,24 @@ public final class CondFormat {
         }
         if (bars != null) {
             try {
-                DataBars.Bar b = bars.at(r, c, this::value, f -> formulaNumber(f, r, c));
+                DataBars.Bar b = bars.at(r, c, this::value, f -> formulaNumber(f, r, c), stopAt);
                 if (b != null) {
                     if (res == null) res = new Result();
                     res.bar = b;
                     res.hideText = b.hideText();
                 }
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | StackOverflowError e) {
                 Warnings.add("セル " + new CellReference(r, c).formatAsString() + " のデータバーを評価できませんでした", e);
             }
         }
         if (icons != null) {
             try {
-                IconSets.Icon ic = icons.at(r, c, this::value, f -> formulaNumber(f, r, c));
+                IconSets.Icon ic = icons.at(r, c, this::value, f -> formulaNumber(f, r, c), stopAt);
                 if (ic != null && IconPainter.known(ic.set())) {
                     if (res == null) res = new Result();
                     res.icon = ic;
                 }
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | StackOverflowError e) {
                 Warnings.add("セル " + new CellReference(r, c).formatAsString() + " のアイコンセットを評価できませんでした", e);
             }
         }
@@ -176,6 +188,82 @@ public final class CondFormat {
                 boolean empty = isEmptyValue(r, c);
                 boolean eq = er.getRule().getComparisonOperation() == org.apache.poi.ss.usermodel.ComparisonOperator.EQUAL;
                 if (empty == eq) { out.add(er); added = true; }
+                continue;
+            }
+            if (er.getType() == ConditionType.CELL_VALUE_IS && !blank(r, c)) {
+                // 文字列・真偽値のセル、または文字列・真偽値と比べる規則は、Excel の順序 (数値 < 文字列 < 真偽値、文字列は大文字・
+                // 小文字を区別しない) で判定し直す (POI は型が違うと当てない。例: "" > 0 は真)
+                Object cv = typedValue(r, c);
+                if (cv != null && CfExt.in(java.util.Arrays.asList(er.getRegions()), r, c)) {
+                    try {
+                        CellRangeAddress base = bounds(er.getRegions());
+                        int dr = r - base.getFirstRow(), dc = c - base.getFirstColumn();
+                        Object a = er.getFormula1() == null ? null : operand(shiftFormula(er.getFormula1(), dr, dc), r, c);
+                        Object b = er.getFormula2() == null ? null : operand(shiftFormula(er.getFormula2(), dr, dc), r, c);
+                        if (a != null && (!(cv instanceof Double) || !(a instanceof Double) || (b != null && !(b instanceof Double)))) {
+                            int ca = cmpExcel(cv, a), cb = b == null ? 0 : cmpExcel(cv, b), ab = b == null ? 0 : cmpExcel(a, b);
+                            Boolean hit = switch (er.getRule().getComparisonOperation()) {
+                                case 1 -> b == null ? null : (ab <= 0 ? ca >= 0 && cb <= 0 : cb >= 0 && ca <= 0);
+                                case 2 -> b == null ? null : !(ab <= 0 ? ca >= 0 && cb <= 0 : cb >= 0 && ca <= 0);
+                                case 3 -> ca == 0;
+                                case 4 -> ca != 0;
+                                case 5 -> ca > 0;
+                                case 6 -> ca < 0;
+                                case 7 -> ca >= 0;
+                                case 8 -> ca <= 0;
+                                default -> null;
+                            };
+                            if (hit != null) {
+                                boolean had = out.remove(er);
+                                if (hit) out.add(er);
+                                if (had || hit) added = true;
+                            }
+                        }
+                    } catch (RuntimeException e) {
+                        // 評価できない数式は POI の判定のまま
+                    }
+                }
+                continue;
+            }
+            if (er.getType() == ConditionType.CELL_VALUE_IS && blank(r, c) && !out.contains(er)) {
+                // 通常の「セルの値」の規則も、空のセルを 0 として比べる (Excel は空のセルを 0 とみなす。POI は空のセルに当てない)
+                CellRangeAddress base = bounds(er.getRegions());
+                if (CfExt.in(java.util.Arrays.asList(er.getRegions()), r, c)) {
+                    try {
+                        int dr = r - base.getFirstRow(), dc = c - base.getFirstColumn();
+                        Double a1 = er.getFormula1() == null ? null : formulaNumber(shiftFormula(er.getFormula1(), dr, dc), r, c);
+                        Double b1 = er.getFormula2() == null ? null : formulaNumber(shiftFormula(er.getFormula2(), dr, dc), r, c);
+                        double v = 0;
+                        if (a1 == null && er.getFormula1() != null) {
+                            // 真偽値・文字列と比べるときは、空のセルを FALSE・"" とみなす (「セルの値 = $C5="法人"」は C5 が法人でなければ
+                            // 空のセルに当たる)。順序は FALSE < TRUE、"" < 文字列
+                            org.apache.poi.ss.formula.eval.ValueEval a = formulaValue(shiftFormula(er.getFormula1(), dr, dc), r, c);
+                            if (a instanceof org.apache.poi.ss.formula.eval.BoolEval bo) a1 = bo.getBooleanValue() ? 1.0 : 0.0;
+                            else if (a instanceof org.apache.poi.ss.formula.eval.StringEval se) a1 = se.getStringValue().isEmpty() ? 0.0 : 1.0;
+                            if (a1 != null && er.getFormula2() != null) {
+                                org.apache.poi.ss.formula.eval.ValueEval b = formulaValue(shiftFormula(er.getFormula2(), dr, dc), r, c);
+                                if (b instanceof org.apache.poi.ss.formula.eval.BoolEval bo) b1 = bo.getBooleanValue() ? 1.0 : 0.0;
+                                else if (b instanceof org.apache.poi.ss.formula.eval.StringEval se) b1 = se.getStringValue().isEmpty() ? 0.0 : 1.0;
+                            }
+                        }
+                        if (a1 != null) {
+                            boolean hit = switch (er.getRule().getComparisonOperation()) {
+                                case 1 -> b1 != null && v >= Math.min(a1, b1) && v <= Math.max(a1, b1);
+                                case 2 -> b1 != null && (v < Math.min(a1, b1) || v > Math.max(a1, b1));
+                                case 3 -> v == a1;
+                                case 4 -> v != a1;
+                                case 5 -> v > a1;
+                                case 6 -> v < a1;
+                                case 7 -> v >= a1;
+                                case 8 -> v <= a1;
+                                default -> false;
+                            };
+                            if (hit) { out.add(er); added = true; }
+                        }
+                    } catch (RuntimeException e) {
+                        // 評価できない数式は該当しないものとする
+                    }
+                }
                 continue;
             }
             if (!formulaFilter(er)) continue;
@@ -273,6 +361,7 @@ public final class CondFormat {
             if (rule.getAttribute("type").equals("cellIs")) {
                 Double v = value(r, c), a = formulaNumber(shiftFormula(Xml.text(fs.get(0)), dr, dc), r, c);
                 Double b = fs.size() > 1 ? formulaNumber(shiftFormula(Xml.text(fs.get(1)), dr, dc), r, c) : null;
+                if (v == null && blank(r, c)) v = 0.0;   // 空のセルは 0 として比べる (Excel の「セルの値」は空のセルを 0 とみなす)
                 if (v == null || a == null) continue;
                 hit = switch (rule.getAttribute("operator")) {
                     case "equal" -> v.doubleValue() == a;
@@ -291,7 +380,10 @@ public final class CondFormat {
             if (!hit) continue;
             if (res == null) res = new Result();
             applyDxf(res, Xml.child(rule, "dxf"));
-            if (Xml.boolAttr(rule, "stopIfTrue", false)) break;
+            if (Xml.boolAttr(rule, "stopIfTrue", false)) {
+                stopAt = Math.min(stopAt, Xml.intAttr(rule, "priority", Integer.MAX_VALUE));
+                break;
+            }
         }
         return res;
     }
@@ -319,7 +411,9 @@ public final class CondFormat {
             Color fg = fgE == null ? null : Xml.boolAttr(fgE, "auto", false) ? Color.BLACK : xmlColor(fgE);
             Color bg = bgE == null ? null : Xml.boolAttr(bgE, "auto", false) ? Color.WHITE : xmlColor(bgE);
             Long bits = CellPainter.PATTERNS.get(pt);
-            if (pt.equals("solid")) res.fill = bg != null ? bg : fg;
+            org.w3c.dom.Element sysE = bgE != null ? bgE : fgE;
+            if (pt.equals("none") || (pt.equals("solid") && sysE != null && "65".equals(sysE.getAttribute("indexed")))) res.fill = Color.WHITE;   // 塗りを消す
+            else if (pt.equals("solid")) res.fill = bg != null ? bg : fg;
             else if (bits != null) {
                 res.patBits = bits;
                 res.patFg = fg != null ? fg : Color.BLACK;
@@ -341,7 +435,13 @@ public final class CondFormat {
             String[] sides = {"top", "right", "bottom", "left"};
             for (int i = 0; i < 4; i++) {
                 org.w3c.dom.Element e = Xml.child(bd, sides[i]);
-                if (e == null || !e.hasAttribute("style")) continue;
+                if (e == null) continue;
+                if (!e.hasAttribute("style") || "none".equals(e.getAttribute("style"))) {
+                    // 線の種類のない辺 (<left/> など) は罫線を消す
+                    if (res.borders == null) res.borders = new Edge[4];
+                    if (res.borders[i] == null) res.borders[i] = CLEARED;
+                    continue;
+                }
                 BorderStyle bs;
                 try {
                     bs = BorderStyle.valueOf(e.getAttribute("style").replaceAll("([A-Z])", "_$1").toUpperCase(java.util.Locale.ROOT));
@@ -390,6 +490,8 @@ public final class CondFormat {
                 res.numFmt = rule.getNumberFormat().getFormat();
                 hit = true;
             }
+            // 塗りなし (patternType="none") とシステムの背景色 (indexed 65) は、セルの塗りを消す (白で塗る)
+            if (res.fill == null && res.patBits == 0 && clearsFill(er)) { res.fill = Color.WHITE; hit = true; }
             PatternFormatting pf = rule.getPatternFormatting();
             if (pf != null && res.fill == null && res.patBits == 0 && pf.getFillPattern() > 1 && pf.getFillPattern() < CellPainter.PATTERN_NAMES.length
                     && CellPainter.PATTERNS.get(CellPainter.PATTERN_NAMES[pf.getFillPattern()]) != null) {
@@ -423,7 +525,15 @@ public final class CondFormat {
                 setB(res, 3, bf.getBorderLeft(), bf.getLeftBorderColorColor());
                 hit = true;
             }
-            if (rule.getStopIfTrue()) break;
+            boolean[] cl = clearedSides(er);
+            if (cl != null) {
+                if (res.borders == null) res.borders = new Edge[4];
+                for (int i = 0; i < 4; i++) if (cl[i] && res.borders[i] == null) { res.borders[i] = CLEARED; hit = true; }
+            }
+            if (rule.getStopIfTrue()) {
+                stopAt = Math.min(stopAt, er.getPriority());
+                break;
+            }
         }
         return hit ? res : null;
     }
@@ -448,6 +558,56 @@ public final class CondFormat {
             case "i" -> font.sizeOfIArray() > 0;
             default -> font.sizeOfStrikeArray() > 0;
         };
+    }
+
+    static final Edge CLEARED = new Edge(BorderStyle.NONE, Color.BLACK);
+
+    /** 規則の dxf の塗りが、塗りなし (patternType="none") か、単色でシステムの背景色 (indexed 65) か。 */
+    private boolean clearsFill(EvaluationConditionalFormatRule er) {
+        var ws = sheet.getCTWorksheet();
+        int f = er.getFormattingIndex(), r = er.getRuleIndex();
+        if (f < 0 || f >= ws.sizeOfConditionalFormattingArray()) return false;
+        var cf = ws.getConditionalFormattingArray(f);
+        if (r < 0 || r >= cf.sizeOfCfRuleArray()) return false;
+        var rule = cf.getCfRuleArray(r);
+        if (!rule.isSetDxfId()) return false;
+        var dxf = ctx.wb.getStylesSource().getDxfAt((int) rule.getDxfId());
+        if (dxf == null || !dxf.isSetFill() || !dxf.getFill().isSetPatternFill()) return false;
+        var pf = dxf.getFill().getPatternFill();
+        if (pf.isSetPatternType()) {
+            if (pf.getPatternType() == org.openxmlformats.schemas.spreadsheetml.x2006.main.STPatternType.NONE) return true;
+            if (pf.getPatternType() != org.openxmlformats.schemas.spreadsheetml.x2006.main.STPatternType.SOLID) return false;
+        }
+        var c = pf.isSetBgColor() ? pf.getBgColor() : pf.isSetFgColor() ? pf.getFgColor() : null;
+        return c != null && c.isSetIndexed() && c.getIndexed() == 65;
+    }
+
+    /**
+     * 規則の dxf の罫線で、辺の要素はあるが線の種類がない (または none) 辺 (上・右・下・左)。Excel はその辺の罫線を、隣のセルの
+     * 罫線も含めて消す (<border/> だけなら何も消さない)。POI の BorderFormatting は未指定と区別しないので dxf を見る。
+     */
+    private boolean[] clearedSides(EvaluationConditionalFormatRule er) {
+        var ws = sheet.getCTWorksheet();
+        int f = er.getFormattingIndex(), r = er.getRuleIndex();
+        if (f < 0 || f >= ws.sizeOfConditionalFormattingArray()) return null;
+        var cf = ws.getConditionalFormattingArray(f);
+        if (r < 0 || r >= cf.sizeOfCfRuleArray()) return null;
+        var rule = cf.getCfRuleArray(r);
+        if (!rule.isSetDxfId()) return null;
+        var dxf = ctx.wb.getStylesSource().getDxfAt((int) rule.getDxfId());
+        if (dxf == null || !dxf.isSetBorder()) return null;
+        var b = dxf.getBorder();
+        var sides = new org.openxmlformats.schemas.spreadsheetml.x2006.main.CTBorderPr[] {
+                b.isSetTop() ? b.getTop() : null, b.isSetRight() ? b.getRight() : null,
+                b.isSetBottom() ? b.getBottom() : null, b.isSetLeft() ? b.getLeft() : null};
+        boolean[] out = new boolean[4];
+        boolean any = false;
+        for (int i = 0; i < 4; i++) {
+            var p = sides[i];
+            if (p == null) continue;
+            if (!p.isSetStyle() || p.getStyle() == org.openxmlformats.schemas.spreadsheetml.x2006.main.STBorderStyle.NONE) { out[i] = true; any = true; }
+        }
+        return any ? out : null;
     }
 
     /** 罫線の 1 辺を設定する (未設定の辺だけ)。 */
@@ -483,6 +643,18 @@ public final class CondFormat {
     }
 
     /** しきい値の数式を評価した数値 (評価できなければ null)。 */
+    /** 数式の値 (セルの参照は値を取り出す)。評価できなければ null。 */
+    private org.apache.poi.ss.formula.eval.ValueEval formulaValue(String f, int r, int c) {
+        if (formulaNumber(f, r, c) != null) return null;   // 評価器の用意を兼ねる (数値は呼び出し側で扱う)
+        try {
+            org.apache.poi.ss.formula.eval.ValueEval v = fe._getWorkbookEvaluator().evaluate(f,
+                    new CellReference(sheet.getSheetName(), r, c, false, false), new CellRangeAddress(r, r, c, c));
+            return org.apache.poi.ss.formula.eval.OperandResolver.getSingleValue(v, r, c);
+        } catch (RuntimeException | org.apache.poi.ss.formula.eval.EvaluationException e) {
+            return null;
+        }
+    }
+
     private Double formulaNumber(String f, int r, int c) {
         if (fe == null) {
             try {
@@ -500,6 +672,50 @@ public final class CondFormat {
         } catch (RuntimeException | org.apache.poi.ss.formula.eval.EvaluationException e) {
             return null;
         }
+    }
+
+    /** 空のセル (セルがない・値のないセル) か。 */
+    /** セルの値 (数値は Double、文字列は String、真偽値は Boolean。数式はキャッシュされた結果。空・エラーは null)。 */
+    private Object typedValue(int r, int c) {
+        Row row = sheet.getRow(r);
+        Cell cell = row == null ? null : row.getCell(c);
+        if (cell == null) return null;
+        CellType t = cell.getCellType();
+        if (t == CellType.FORMULA) t = cell.getCachedFormulaResultType();
+        return switch (t) {
+            case NUMERIC -> cell.getNumericCellValue();
+            case STRING -> cell.getStringCellValue();
+            case BOOLEAN -> cell.getBooleanCellValue();
+            default -> null;
+        };
+    }
+
+    /** 規則の数式の値 (数値・文字列・真偽値。評価できなければ null)。 */
+    private Object operand(String f, int r, int c) {
+        Double n = formulaNumber(f, r, c);
+        return n != null ? n : typed(formulaValue(f, r, c));
+    }
+
+    private static Object typed(org.apache.poi.ss.formula.eval.ValueEval v) {
+        if (v instanceof org.apache.poi.ss.formula.eval.NumberEval n) return n.getNumberValue();
+        if (v instanceof org.apache.poi.ss.formula.eval.StringEval s) return s.getStringValue();
+        if (v instanceof org.apache.poi.ss.formula.eval.BoolEval b) return b.getBooleanValue();
+        return null;
+    }
+
+    /** Excel の値の順序: 数値 < 文字列 (大文字・小文字を区別しない) < 真偽値 (FALSE < TRUE)。 */
+    static int cmpExcel(Object x, Object y) {
+        int rx = x instanceof Double ? 0 : x instanceof String ? 1 : 2, ry = y instanceof Double ? 0 : y instanceof String ? 1 : 2;
+        if (rx != ry) return Integer.compare(rx, ry);
+        if (x instanceof Double a) return Double.compare(a, (Double) y);
+        if (x instanceof String a) return Integer.signum(a.compareToIgnoreCase((String) y));
+        return Boolean.compare((Boolean) x, (Boolean) y);
+    }
+
+    private boolean blank(int r, int c) {
+        Row row = sheet.getRow(r);
+        Cell cell = row == null ? null : row.getCell(c);
+        return cell == null || cell.getCellType() == CellType.BLANK;
     }
 
     private Double value(int r, int c) {

@@ -245,7 +245,7 @@ public final class ValueFormatter {
 
     /** 表示形式をセクション (; 区切り。引用符・角括弧・エスケープの中は区切らない) に分ける。 */
     /** 区画が 1 つで、引用符の外に @ がある書式か (「@」だけの書式を除く)。 */
-    static boolean textOnly(String fmt) {
+    public static boolean textOnly(String fmt) {
         return fmt != null && !fmt.trim().equals("@") && sections(fmt).size() == 1 && ExcelFormat.containsUnquoted(fmt, '@');
     }
 

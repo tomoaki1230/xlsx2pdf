@@ -159,7 +159,8 @@ public final class ExcelFormat {
                 // 条件付きの表示形式の既定のセクションは、符号付きで値を表示する
                 sec = secs.size() > 2 ? secs.get(2) : secs.get(secs.size() - 1);
             }
-            useAbs = sec.hasCond && neg && sec.condOp.startsWith("<");
+            // Excel の動き: 条件が負の値だけを指す (< で 0 以下、= で負の値) ときだけ符号を付けない。[<5]・[<=0] は符号が残る
+            useAbs = sec.hasCond && neg && (sec.condOp.equals("<") && sec.condVal <= 0 || sec.condOp.equals("=") && sec.condVal < 0);
         } else if (secs.size() == 1) {
             sec = secs.get(0);
         } else if (v > 0 || (v == 0 && secs.size() < 3)) {
@@ -173,6 +174,11 @@ public final class ExcelFormat {
         out.color = sec.color;
         String body = sec.body;
         if (sec.hasCond && secs.size() >= 2 && neg && sec == secs.get(1)) useAbs = true;
+        // 条件が最初の区画だけにある 2 区画の書式 ([>0]0;0): 2 番目の区画に来た負の値は、最初の条件の補集合が非正のときだけ符号を付けない (Excel で確認。[>5]0;0 は -5、[>0]0;0 は 5)
+        if (neg && !useAbs && secs.size() == 2 && sec == secs.get(1) && !sec.hasCond && secs.get(0).hasCond) {
+            Section f = secs.get(0);
+            if ((f.condOp.equals(">") || f.condOp.equals(">=")) && f.condVal <= 0 || f.condOp.equals("<") && f.condVal < 0) useAbs = true;
+        }
         double val = useAbs ? Math.abs(v) : v;
         // [$-F800] は OS の長い日付形式、[$-F400] は OS の時刻形式で表示し、後ろの書式 (他のアプリ用の代替) は使わない。
         // 日本語の Windows の既定は「2026年10月21日」と「13:05:09」
@@ -185,7 +191,7 @@ public final class ExcelFormat {
         } else {
             out.text = formatNumber(val, body, true);
         }
-        if (sec.dbnum >= 1 && sec.dbnum <= 3) out.text = dbnum(out.text, sec.dbnum);
+        if (sec.dbnum >= 1 && sec.dbnum <= 3) out.text = dbnum(out.text, sec.dbnum, isDateFormat(body) ? 1 : isGeneral(body) ? 2 : 0);
         int f = out.text.indexOf(FILL);
         if (f >= 0 && f + 1 < out.text.length()) {
             out.fill = out.text.charAt(f + 1);
@@ -198,11 +204,18 @@ public final class ExcelFormat {
     private static final String[] UNIT1 = {"", "十", "百", "千"}, UNIT2 = {"", "拾", "百", "阡"};
     private static final String[] BIG1 = {"", "万", "億", "兆"}, BIG2 = {"", "萬", "億", "兆"};
 
-    /**
-     * [DBNum] の数字の書き方に書き換える: 数字の並びごとに、1・2 は位取りの漢数字 (小数点の後は 1 字ずつ)、3 は全角の数字。
-     * Excel の印刷: 0 の [DBNum3] で −13 → 「-１３」、[DBNum1] の和暦で「明治三十三年一月〇日」。
-     */
+    /** 日付の書式の [DBNum] (dbnum(t, kind, 1))。 */
     static String dbnum(String t, int kind) {
+        return dbnum(t, kind, 1);
+    }
+
+    /**
+     * [DBNum] の数字の書き方に書き換える (Excel で確認): 3 は全角の数字。1・2 は、数値の書式では数字を 1 字ずつ漢数字にする (1234 → 一二三四)。
+     * 標準 (mode 2) は桁数によらず位取りの漢数字 (1234 → 千二百三十四)。
+     * 日付・時刻の書式 (mode 1) では、数字の並びが 1〜2 桁で 0 始まりでなければ位取りの漢数字 (12 → 十二、33 → 三十三、0 → 〇)、
+     * それ以外 (4 桁の年・0 始まりの 01・小数点の後) は 1 字ずつ (二〇二〇、〇一)。
+     */
+    static String dbnum(String t, int kind, int mode) {
         StringBuilder o = new StringBuilder();
         int i = 0;
         while (i < t.length()) {
@@ -214,7 +227,7 @@ public final class ExcelFormat {
             boolean frac = i > 0 && t.charAt(i - 1) == '.';
             if (kind == 3) {
                 for (char d : run.toCharArray()) o.append((char) ('０' + (d - '0')));
-            } else if (frac || run.length() > 16) {
+            } else if (mode == 0 || frac || run.length() > 16 || mode == 1 && (run.length() > 2 || run.length() > 1 && run.charAt(0) == '0')) {
                 String k = kind == 1 ? KAN1 : KAN2;
                 for (char d : run.toCharArray()) o.append(k.charAt(d - '0'));
             } else {
@@ -338,6 +351,15 @@ public final class ExcelFormat {
     private static final String[] DOW = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
     private static final String[] DOW_JA = {"月", "火", "水", "木", "金", "土", "日"};
 
+    /**
+     * Excel の曜日 (0 = 月曜)。シリアル値から数える: 1900 年基準は 1 (1900/1/1) が日曜、0 が土曜。
+     * Excel は 1900 年をうるう年として数えるので、1900/3/1 より前は実際の暦と 1 日ずれる (Excel に合わせる)。
+     */
+    int excelDow(double serial) {
+        long sun = Math.floorMod((long) serial + (date1904 ? 5 : 6), 7);   // 0 = 日曜
+        return (int) ((sun + 6) % 7);
+    }
+
     /** 日付にできる最大のシリアル値 (9999/12/31。1904 年基準はその分小さい)。 */
     static final double MAX_DATE = 2958465, MAX_DATE_1904 = 2957003;
 
@@ -348,10 +370,14 @@ public final class ExcelFormat {
      * @param locale セクションのロケール (411 なら日本語の月・曜日)
      */
     String formatDate(double v, String body, String locale) {
+        if (!Double.isFinite(v)) return "#".repeat(8);   // 無限大・NaN は日付にも経過時間にもできない
         if (!DateUtil.isValidExcelDate(v) && !body.contains("[")) return "#".repeat(8);
         // 9999/12/31 を超える値は日付にできず、Excel は # で埋める (経過時間 [h]・[m]・[s] の書式は除く)
         boolean elapsed = body.toLowerCase(Locale.ROOT).matches("(?s).*\\[(h+|m+|s+)\\].*");
-        if (!elapsed && Math.floor(v) > (date1904 ? MAX_DATE_1904 : MAX_DATE)) return "#".repeat(8);
+        // 経過時間でも、ほかの日付・時刻の要素を含む書式 (yyyy [h]:mm・[h]:mm・[mm]:ss・[h]:mm m など) は日付にできない値を # で埋める
+        // ([h]・[m]・[s] だけの書式は上限がない)
+        boolean datePart = body.replaceAll("\\[[^\\]]*\\]|\"[^\"]*\"|\\\\.", "").toLowerCase(Locale.ROOT).matches("(?s).*[ydehmsa].*");
+        if ((!elapsed || datePart) && Math.floor(v) > (date1904 ? MAX_DATE_1904 : MAX_DATE)) return "#".repeat(8);
         // 秒の小数部の桁数
         int fracDigits = 0;
         Matcher fm = FRACTION_SECONDS.matcher(body.toLowerCase(Locale.ROOT));
@@ -370,12 +396,14 @@ public final class ExcelFormat {
         // シリアル値 0 は Excel では 1900 年 1 月 0 日 (明治33年1月0日)
         boolean dayZero = !date1904 && Math.floor(rounded) == 0;
         if (dayZero) dt = LocalDateTime.of(1900, 1, 1, 0, 0);
+        // シリアル値 60 は Excel では存在しない 1900 年 2 月 29 日 (実際の暦では 3 月 1 日になる)
+        boolean fakeLeap = !date1904 && Math.floor(rounded) == 60;
         double secOfDay = (rounded - Math.floor(rounded)) * 86400.0;
         long totalSec = (long) Math.floor(secOfDay + 1e-6);
         int hh = (int) (totalSec / 3600), mi = (int) (totalSec % 3600 / 60), ss = (int) (totalSec % 60);
         double frac = secOfDay - totalSec;
         boolean ampm = body.toLowerCase(Locale.ROOT).contains("am/pm") || body.toLowerCase(Locale.ROOT).contains("a/p")
-                || body.contains("午前/午後");
+                || body.contains("午前/午後") || body.contains("上午/下午");
         String[] era = ValueFormatter.era(dt.toLocalDate());
         StringBuilder sb = new StringBuilder();
         String b = body;
@@ -410,6 +438,9 @@ public final class ExcelFormat {
                 i += 3;
             } else if (b.startsWith("午前/午後", i)) {
                 toks.add("PJ");
+                i += 5;
+            } else if (b.startsWith("上午/下午", i)) {
+                toks.add("PC");
                 i += 5;
             } else {
                 char lc = Character.toLowerCase(c);
@@ -464,6 +495,7 @@ public final class ExcelFormat {
                     boolean pm = hh >= 12;
                     if (x.equals("5")) sb.append(pm ? "PM" : "AM");
                     else if (x.equals("3")) sb.append(pm ? "P" : "A");
+                    else if (x.equals("C")) sb.append(pm ? "下午" : "上午");
                     else sb.append(pm ? "午後" : "午前");
                 }
                 case 'E' -> {
@@ -477,7 +509,7 @@ public final class ExcelFormat {
                     switch (x.charAt(0)) {
                         case 'y' -> sb.append(x.length() <= 2 ? pad0(dt.getYear() % 100, 2) : String.valueOf(dt.getYear()));
                         case 'm' -> {
-                            int mo = dt.getMonthValue();
+                            int mo = fakeLeap ? 2 : dt.getMonthValue();
                             switch (x.length()) {
                                 case 1 -> sb.append(mo);
                                 case 2 -> sb.append(pad0(mo, 2));
@@ -487,8 +519,8 @@ public final class ExcelFormat {
                             }
                         }
                         case 'd' -> {
-                            int d = dayZero ? 0 : dt.getDayOfMonth();
-                            int w = dayZero ? 5 : dt.getDayOfWeek().getValue() - 1;
+                            int d = dayZero ? 0 : fakeLeap ? 29 : dt.getDayOfMonth();
+                            int w = excelDow(Math.floor(rounded));
                             switch (x.length()) {
                                 case 1 -> sb.append(d);
                                 case 2 -> sb.append(pad0(d, 2));
@@ -497,7 +529,7 @@ public final class ExcelFormat {
                             }
                         }
                         case 'a' -> {
-                            int w = dt.getDayOfWeek().getValue() - 1;
+                            int w = excelDow(Math.floor(rounded));
                             sb.append(x.length() >= 4 ? DOW_JA[w] + "曜日" : DOW_JA[w]);
                         }
                         case 'h' -> {
@@ -626,16 +658,15 @@ public final class ExcelFormat {
         }
         boolean negative = v < 0 && autoMinus && !isZeroResult(num);
         StringBuilder sb = new StringBuilder();
-        boolean signed = false;
         for (Object o : parts) {
             if (o instanceof Integer) {
-                if (negative && !signed) { sb.append('-'); signed = true; }
                 sb.append(num);
             } else {
                 sb.append((String) o);
             }
         }
-        if (negative && !signed) sb.insert(0, '-');
+        // 符号は、前にリテラル・空白・繰り返しがあっても先頭に付く (-¥1,235、-$1,234.50。Excel で確認)
+        if (negative) sb.insert(0, '-');
         return sb.toString();
     }
 
@@ -647,6 +678,7 @@ public final class ExcelFormat {
 
     /** 絶対値を "#,##0.00"、"0.0E+00"、"# ?/?" のような数字のパターンで文字列にする。 */
     static String renderNumber(double a, String p) {
+        if (!Double.isFinite(a)) return "########";   // 無限大・NaN は数字にできない (日付側と同じく # で埋める)
         // Excel は値を有効数字 15 桁に丸めてから表示形式を当てる (1.4449999999999998 を 0.00 で 1.45)
         if (Double.isFinite(a) && a != 0) a = new BigDecimal(a).round(new java.math.MathContext(15)).doubleValue();
         int e = p.indexOf('E');
